@@ -34,7 +34,7 @@ class Client:
         self.malicious = malicious
         self.attack_epoch = attack_epoch
     
-    def local_update(self, global_weights, epoch, return_avg_loss=False):
+    def local_update(self, global_weights, epoch, return_avg_loss=True):
         """Client performs local update and sends gradients back to the server."""
         local_model = ThreeLayerFC().to(device)
         local_model.load_state_dict(global_weights)
@@ -42,7 +42,6 @@ class Client:
 
         total_loss = 0
         num_batches = 0
-        optimizer = optim.SGD(local_model.parameters(), lr=0.01)
 
         for data, target in self.data_loader:
             data, target = data.to(device), target.to(device)
@@ -50,18 +49,16 @@ class Client:
             # If the client is malicious and the current epoch >= attack_epoch, apply label flipping
             if self.malicious and epoch >= self.attack_epoch:
                 target = flip_labels(target)
-            
-            optimizer.zero_grad()
+
             output = local_model(data)
             loss = nn.CrossEntropyLoss()(output, target)
             loss.backward()
-            optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
         
         # Collect gradients
-        grads = [param.grad.clone() for param in local_model.parameters()]
+        grads = [param.grad.clone() / num_batches for param in local_model.parameters()]
 
         avg_loss = None
         if return_avg_loss:
@@ -86,11 +83,12 @@ class Server:
         num_items = int(len(train_dataset)/num_clients)
         indices = np.random.permutation(len(train_dataset))
         client_indices = [indices[i*num_items:(i+1)*num_items] for i in range(num_clients)]
-        client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, idx), batch_size=64, shuffle=True) for idx in client_indices]
+        client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, idx), batch_size=128, shuffle=True) for idx in client_indices]
 
         # Select malicious clients
         num_malicious = int(fraction_malicious * num_clients)
         malicious_client_ids = random.sample(range(num_clients), num_malicious)
+        print(f"Malicoius_index: {malicious_client_ids}")
         
         for i in range(num_clients):
             is_malicious = i in malicious_client_ids
@@ -109,7 +107,7 @@ class Server:
 
         return output
 
-    def federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05), is_norm_one=True,
+    def federated_learning(self, alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05), is_norm_one=True,
                            inner_iteration_range=3, alpha_decay_param=0.9, beta_decay_param=0.9):
         counter = -1
         if not isinstance(alpha_vec, list):
@@ -118,7 +116,7 @@ class Server:
         if not isinstance(beta_vec, list):
             beta_vec = [beta_vec]
 
-        lambda_range = np.linspace(lambda_val[0], lambda_val[1], lambda_step)
+        lambda_range = np.linspace(lambda_val[0], lambda_val[1], self.total_epochs)
 
         for i in range(len(alpha_vec)):
             counter += 1
@@ -153,7 +151,9 @@ class Server:
                     # Update the global model using G and w
                     client_losses = []
                     client_gradients = []
-                    G = G_next
+                    G = G_next # Not sure.
+                    if( inner_theta_iteration + 1 == inner_iteration_range ):
+                        params_copy = {key: val.clone() for key, val in self.global_model.state_dict().items()} # Not sure about this.
                     with torch.no_grad():
                         for param_idx, param in enumerate(self.global_model.parameters()):
                             # Initialize the aggregated gradient
@@ -164,10 +164,6 @@ class Server:
                                 agg_grad += w[client_idx] * grad
                             # Update global parameters
                             param -= alpha * agg_grad  # Update rule
-
-                    # Print the average loss across clients
-                    avg_loss = sum(F_T) / num_clients
-                    print(f"Average Loss: {avg_loss}")
                     #######################################
 
                     #######################################
@@ -178,13 +174,16 @@ class Server:
                             grads, _ = client.local_update(global_weights, epoch, False)
                         else:
                             grads, avg_loss = client.local_update(global_weights, epoch, True)
-                            client_losses.append(avg_loss)
+                        client_losses.append(avg_loss)
                         client_gradients.append(grads)
-                    
+
                     alpha *= alpha_decay_param
                     # Construct G (gradient matrix) and F_T (loss vector)
                     G_next = client_gradients  # List of gradients from each client
                 F_T_next = client_losses   # List of losses from each client
+                # Print the average loss across clients
+                avg_loss = sum(F_T_next) / num_clients
+                print(f"Average Loss After Theta Update: {avg_loss}")
 
                 alpha = alpha_vec[i] # Reset
 
@@ -192,13 +191,15 @@ class Server:
                 for inner_w_iteration in range(inner_iteration_range):
                     # Calculate m_next for each client
                     G_next_flat = self._flatten_tensors(G_next)
+                    w_tensor = torch.tensor(w).to(device).to(torch.float32)
+                    F_T_next_tensor = torch.tensor(F_T_next).to(device).to(torch.float32)
 
                     G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-                    G_T_G_next_w = torch.matmul(G_T_G_next, torch.tensor(w))
+                    G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
                     if is_ftotal:
-                        m_next = (torch.tensor(w) + beta * alpha * G_T_G_next_w - beta * torch.tensor(F_T_next)).tolist()
+                        m_next = (w_tensor + beta * alpha * G_T_G_next_w - beta * F_T_next_tensor).tolist()
                     else:
-                        m_next = (torch.tensor(w) + beta * alpha * G_T_G_next_w).tolist()
+                        m_next = (w_tensor + beta * alpha * G_T_G_next_w).tolist()
                     self.list_m_next[counter].append(m_next)
 
                     w_next = self._norm_calculate(m_next, lambda_range[epoch], is_norm_one)
@@ -208,7 +209,7 @@ class Server:
                     # Calculate G_next, F_T_next
                     w = w_next_normalize
                     with torch.no_grad():
-                        for param_idx, param in enumerate(self.global_model.parameters()):
+                        for param_idx, (name, param) in enumerate(self.global_model.named_parameters()):
                             # Initialize the aggregated gradient
                             agg_grad = torch.zeros_like(param.data)
                             # Aggregate gradients weighted by w
@@ -216,8 +217,10 @@ class Server:
                                 grad = G[client_idx][param_idx]
                                 agg_grad += w[client_idx] * grad
                             # Update global parameters
-                            param -= alpha * agg_grad  # Update rule
+                            param.data = params_copy[name].data - alpha * agg_grad  # Update rule, Not sure!
 
+                    client_losses = []
+                    client_gradients = []
                     global_weights = self.global_model.state_dict()
                     for client in self.clients:
                         grads, avg_loss = client.local_update(global_weights, epoch, True)
@@ -229,6 +232,9 @@ class Server:
                     alpha *= alpha_decay_param
                     beta *= beta_decay_param
 
+                avg_loss = sum(F_T_next) / num_clients
+                print(f"Average Loss After Weights Update: {avg_loss}")
+                print(f"Sparse_Weight: {w}")
                 G = G_next
                 F_T = F_T_next
                 #######################################
@@ -253,10 +259,13 @@ class Server:
 
 if __name__ == "__main__":
     # Initialize server and start federated learning
-    num_clients = 5  # Total number of clients
-    fraction_malicious = 0.2  # Fraction of malicious clients (e.g., 40%)
-    attack_epoch = 0  # Malicious clients start label-flipping after this epoch
-    total_epochs = 10  # Total number of epochs
+    num_clients = 10  # Total number of clients
+    fraction_malicious = 0.3  # Fraction of malicious clients (e.g., 40%)
+    attack_epoch = 1  # Malicious clients start label-flipping after this epoch
+    total_epochs = 20  # Total number of epochs
     n_max = 4  # Maximum number of non malicious clients
+    alpha_vec = [0.05]
+    beta_vec = [0.01]
     server = Server(num_clients=num_clients, fraction_malicious=fraction_malicious, attack_epoch=attack_epoch, total_epochs=total_epochs, n_max=n_max)
-    server.federated_learning()
+    server.federated_learning(alpha_vec=alpha_vec, beta_vec=beta_vec, is_ftotal=True, lambda_val=(0, 0.01), is_norm_one=True,
+                              inner_iteration_range=3, alpha_decay_param=0.9, beta_decay_param=0.9)
