@@ -34,7 +34,7 @@ class Client:
         self.malicious = malicious
         self.attack_epoch = attack_epoch
     
-    def local_update(self, global_weights, epoch):
+    def local_update(self, global_weights, epoch, return_avg_loss=False):
         """Client performs local update and sends gradients back to the server."""
         local_model = ThreeLayerFC().to(device)
         local_model.load_state_dict(global_weights)
@@ -62,7 +62,10 @@ class Client:
         
         # Collect gradients
         grads = [param.grad.clone() for param in local_model.parameters()]
-        avg_loss = total_loss / num_batches
+
+        avg_loss = None
+        if return_avg_loss:
+            avg_loss = total_loss / num_batches
         
         return grads, avg_loss
 
@@ -106,15 +109,22 @@ class Server:
 
         return output
 
-    def federated_learning(self):
+    def federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05), is_norm_one=True,
+                           inner_iteration_range=3, alpha_decay_param=0.9, beta_decay_param=0.9):
         counter = -1
-        for alpha, beta in [(0.1, 0.1)]:
+        if not isinstance(alpha_vec, list):
+            alpha_vec = [alpha_vec]
+        
+        if not isinstance(beta_vec, list):
+            beta_vec = [beta_vec]
+
+        lambda_range = np.linspace(lambda_val[0], lambda_val[1], lambda_step)
+
+        for i in range(len(alpha_vec)):
             counter += 1
             self.list_m_next.append([])
             self.list_w_next.append([])
             num_clients = len(self.clients)
-            # alpha = 0.1  # Learning rate
-            # beta = 0.01 # Learning rate
 
             # Initialize model parameters and weight vector w
             w = [1.0 / num_clients] * num_clients  # Equal weights initially
@@ -132,69 +142,114 @@ class Server:
             G = client_gradients  # List of gradients from each client
             F_T = client_losses   # List of losses from each client
 
+            G_next = G
             for epoch in range(self.total_epochs):
-                if epoch == 8:
-                    print("HEY!")
+                alpha = alpha_vec[i]
+                beta = beta_vec[i]
                 print(f"Epoch {epoch+1}/{self.total_epochs}")
-                client_losses = []
-                client_gradients = []
 
-                ######################################
-                # Update the global model using G and w
-                with torch.no_grad():
-                    for param_idx, param in enumerate(self.global_model.parameters()):
-                        # Initialize the aggregated gradient
-                        agg_grad = torch.zeros_like(param.data)
-                        # Aggregate gradients weighted by w
-                        for client_idx in range(num_clients):
-                            grad = G[client_idx][param_idx]
-                            agg_grad += w[client_idx] * grad
-                        # Update global parameters
-                        param -= alpha * agg_grad  # Update rule
-                
-                # Print the average loss across clients
-                avg_loss = sum(F_T) / num_clients
-                print(f"Average Loss: {avg_loss}")
-                #######################################
+                for inner_theta_iteration in range(inner_iteration_range):
+                    ######################################
+                    # Update the global model using G and w
+                    client_losses = []
+                    client_gradients = []
+                    G = G_next
+                    with torch.no_grad():
+                        for param_idx, param in enumerate(self.global_model.parameters()):
+                            # Initialize the aggregated gradient
+                            agg_grad = torch.zeros_like(param.data)
+                            # Aggregate gradients weighted by w
+                            for client_idx in range(num_clients):
+                                grad = G[client_idx][param_idx]
+                                agg_grad += w[client_idx] * grad
+                            # Update global parameters
+                            param -= alpha * agg_grad  # Update rule
 
-                #######################################
-                # Each client performs a local update and returns gradients
-                global_weights = self.global_model.state_dict()
-                for client in self.clients:
-                    grads, avg_loss = client.local_update(global_weights, epoch)
-                    client_gradients.append(grads)
-                    client_losses.append(avg_loss)
-                
-                # Construct G (gradient matrix) and F_T (loss vector)
-                G_next = client_gradients  # List of gradients from each client
+                    # Print the average loss across clients
+                    avg_loss = sum(F_T) / num_clients
+                    print(f"Average Loss: {avg_loss}")
+                    #######################################
+
+                    #######################################
+                    # Each client performs a local update and returns gradients
+                    global_weights = self.global_model.state_dict()
+                    for client in self.clients:
+                        if inner_theta_iteration + 1 != inner_iteration_range:
+                            grads, _ = client.local_update(global_weights, epoch, False)
+                        else:
+                            grads, avg_loss = client.local_update(global_weights, epoch, True)
+                            client_losses.append(avg_loss)
+                        client_gradients.append(grads)
+                    
+                    alpha *= alpha_decay_param
+                    # Construct G (gradient matrix) and F_T (loss vector)
+                    G_next = client_gradients  # List of gradients from each client
                 F_T_next = client_losses   # List of losses from each client
 
-                # Calculate m_next for each client
-                G_flat = self._flatten_tensors(G)
-                G_next_flat = self._flatten_tensors(G_next)
+                alpha = alpha_vec[i] # Reset
 
-                G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-                G_T_G_next_w = torch.matmul(G_T_G_next, torch.tensor(w))
-                m_next = (torch.tensor(w) + beta * alpha * G_T_G_next_w - beta * torch.tensor(F_T)).tolist()
-                self.list_m_next[counter].append(m_next)
-                z_next = sorted(m_next, reverse=True)
-                index_order = np.flip(np.argsort(m_next))
-                n_z = sum(e > 0 for e in z_next)
-                w_tilde_next = [0] * num_clients
-                w_next = [0] * num_clients
-                for i in range(min(self.n_max, n_z)):
-                    w_tilde_next[i] = z_next[i]
-                    w_next[index_order[i]] = w_tilde_next[i]
-                w_norm_one = sum(w_next)
-                if w_norm_one != 0:
-                    w_next_normalize = [e / w_norm_one for e in w_next]
-                w_next_normalize = w_next
-                self.list_w_next[counter].append(w_next_normalize)
+                G_flat = self._flatten_tensors(G)
+                for inner_w_iteration in range(inner_iteration_range):
+                    # Calculate m_next for each client
+                    G_next_flat = self._flatten_tensors(G_next)
+
+                    G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
+                    G_T_G_next_w = torch.matmul(G_T_G_next, torch.tensor(w))
+                    if is_ftotal:
+                        m_next = (torch.tensor(w) + beta * alpha * G_T_G_next_w - beta * torch.tensor(F_T_next)).tolist()
+                    else:
+                        m_next = (torch.tensor(w) + beta * alpha * G_T_G_next_w).tolist()
+                    self.list_m_next[counter].append(m_next)
+
+                    w_next = self._norm_calculate(m_next, lambda_range[epoch], is_norm_one)
+                    w_next_normalize = self._normalize(w_next)
+                    self.list_w_next[counter].append(w_next_normalize)
+
+                    # Calculate G_next, F_T_next
+                    w = w_next_normalize
+                    with torch.no_grad():
+                        for param_idx, param in enumerate(self.global_model.parameters()):
+                            # Initialize the aggregated gradient
+                            agg_grad = torch.zeros_like(param.data)
+                            # Aggregate gradients weighted by w
+                            for client_idx in range(num_clients):
+                                grad = G[client_idx][param_idx]
+                                agg_grad += w[client_idx] * grad
+                            # Update global parameters
+                            param -= alpha * agg_grad  # Update rule
+
+                    global_weights = self.global_model.state_dict()
+                    for client in self.clients:
+                        grads, avg_loss = client.local_update(global_weights, epoch, True)
+                        client_losses.append(avg_loss)
+                        client_gradients.append(grads)
+                    G_next = client_gradients
+                    F_T_next = client_losses
+                    
+                    alpha *= alpha_decay_param
+                    beta *= beta_decay_param
 
                 G = G_next
                 F_T = F_T_next
-                w = w_next_normalize
                 #######################################
+
+    def _norm_calculate(self, m_next, lambda_value, is_norm_one=True):
+        index_order = [f for f, value in enumerate(m_next) if value > lambda_value]
+        w_next = [0] * len(m_next)
+        for i in range(len(index_order)):
+            w_next[index_order[i]] = m_next[index_order[i]]
+            if is_norm_one:
+                w_next[index_order[i]] -= lambda_value
+        return w_next
+
+    def _normalize(self, w_next):
+        w_norm_one = sum(w_next)
+        if w_norm_one != 0:
+            w_next_normalize = [e / w_norm_one for e in w_next]
+        else:
+            w_next_normalize = [1.0 / len(w_next)] * len(w_next)
+
+        return w_next_normalize
 
 if __name__ == "__main__":
     # Initialize server and start federated learning
