@@ -1,15 +1,12 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 import random
 from torchvision import datasets, transforms
-import cvxpy as cp
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ThreeLayerFC model for simplicity
+# Simple Three-Layer Fully Connected Model
 class ThreeLayerFC(nn.Module):
     def __init__(self):
         super(ThreeLayerFC, self).__init__()
@@ -19,10 +16,9 @@ class ThreeLayerFC(nn.Module):
 
     def forward(self, x):
         x = x.view(-1, 28 * 28)
-        x = nn.ReLU()(self.fc1(x))
-        x = nn.ReLU()(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
 
 # Function to flip labels for malicious clients
 def flip_labels(labels):
@@ -34,9 +30,8 @@ class Client:
         self.data_loader = data_loader
         self.malicious = malicious
         self.attack_epoch = attack_epoch
-    
+
     def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
-        """Client performs local update and sends gradients back to the server."""
         local_model = ThreeLayerFC().to(device)
         local_model.load_state_dict(global_weights)
         local_model.train()
@@ -46,7 +41,7 @@ class Client:
 
         for data, target in self.data_loader:
             data, target = data.to(device), target.to(device)
-            
+
             # If the client is malicious and the current epoch >= attack_epoch, apply label flipping
             if self.malicious and epoch >= self.attack_epoch:
                 target = flip_labels(target)
@@ -55,327 +50,236 @@ class Client:
             loss = nn.CrossEntropyLoss()(output, target)
             if compute_gradient:
                 loss.backward()
-            
+
             total_loss += loss.item()
             num_batches += 1
-        
-        avg_loss = None
-        grads = None
 
-        if return_avg_loss:
-            avg_loss = total_loss / num_batches
-
-        if compute_gradient:
-            # Collect gradients
-            grads = [param.grad.clone() / num_batches for param in local_model.parameters()]
+        avg_loss = total_loss / num_batches if return_avg_loss else None
+        grads = [param.grad.clone() / num_batches for param in local_model.parameters()] if compute_gradient else None
 
         return grads, avg_loss
 
 class Server:
-    def __init__(self, num_clients, fraction_malicious, n_max, attack_epoch=0, total_epochs=5):
+    def __init__(self, num_clients, fraction_malicious, attack_epoch=0, total_epochs=5):
         self.global_model = ThreeLayerFC().to(device)
-        self.clients = []
-        self.attack_epoch = attack_epoch
+        self.clients = self._initialize_clients(num_clients, fraction_malicious, attack_epoch)
         self.total_epochs = total_epochs
-        self.n_max = n_max
         self.list_m_next = []
         self.list_w_next = []
 
-
-        # Load dataset and partition among clients
+    def _initialize_clients(self, num_clients, fraction_malicious, attack_epoch):
         transform = transforms.Compose([transforms.ToTensor()])
         train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-        num_items = int(len(train_dataset)/num_clients)
+        num_items = len(train_dataset) // num_clients
         indices = np.random.permutation(len(train_dataset))
-        client_indices = [indices[i*num_items:(i+1)*num_items] for i in range(num_clients)]
+        client_indices = [indices[i * num_items:(i + 1) * num_items] for i in range(num_clients)]
         client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, idx), batch_size=128, shuffle=True) for idx in client_indices]
 
-        # Select malicious clients
         num_malicious = int(fraction_malicious * num_clients)
-        malicious_client_ids = random.sample(range(num_clients), num_malicious)
-        print(f"Malicoius_index: {malicious_client_ids}")
-        
-        for i in range(num_clients):
-            is_malicious = i in malicious_client_ids
-            self.clients.append(Client(i, client_loaders[i], malicious=is_malicious, attack_epoch=self.attack_epoch))
-    
+        malicious_ids = random.sample(range(num_clients), num_malicious)
+        print(f"Malicious Client Indices: {malicious_ids}")
+
+        return [Client(i, client_loaders[i], malicious=(i in malicious_ids), attack_epoch=attack_epoch) for i in range(num_clients)]
+
     def _flatten_tensors(self, input_list):
-        """
-        Flatten tensors
-        """
-        output = []
-        for col in input_list:
-            flatten_tensor = [tensor.view(-1) for tensor in col]
-            stacked_tensor = torch.concat(flatten_tensor)
-            output.append(stacked_tensor)
-        output = torch.stack(output).T
+        flattened = [torch.cat([tensor.view(-1) for tensor in tensors]) for tensors in input_list]
+        return torch.stack(flattened).T
 
-        return output
+    def federated_learning(self, alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, None),
+                           c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
+                           c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=10):
 
-    def federated_learning(self, alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, None), is_norm_one=True,
-                           inner_iteration_range=3, alpha_decay_param=0.9, beta_decay_param=0.9):
-        counter = -1
-        if not isinstance(alpha_vec, list):
-            alpha_vec = [alpha_vec]
+        # Ensure alpha_vec and beta_vec are lists
+        alpha_vec = [alpha_vec] if not isinstance(alpha_vec, list) else alpha_vec
+        beta_vec = [beta_vec] if not isinstance(beta_vec, list) else beta_vec
         
-        if not isinstance(beta_vec, list):
-            beta_vec = [beta_vec]
-        
-        lambda_range = list(np.linspace(lambda_val[0], lambda_val[1], lambda_val[-1] if lambda_val[-1] else self.total_epochs))
-        if len(lambda_range) != self.total_epochs:
-            lambda_range.extend([lambda_val[1]] * (self.total_epochs - len(lambda_range)))
+        # Generate lambda_range
+        num_steps = lambda_val[-1] if lambda_val[-1] else self.total_epochs
+        lambda_range = np.linspace(lambda_val[0], lambda_val[1], num_steps).tolist()
+        lambda_range += [lambda_val[1]] * max(0, self.total_epochs - len(lambda_range))
 
-        for i in range(len(alpha_vec)):
-            counter += 1
+        for i, (alpha, beta) in enumerate(zip(alpha_vec, beta_vec)):
             self.list_m_next.append([])
             self.list_w_next.append([])
             num_clients = len(self.clients)
 
-            # Initialize model parameters and weight vector w
-            w = [1.0 / num_clients] * num_clients  # Equal weights initially
+            # Initialize weights
+            w = [1.0 / num_clients] * num_clients
             global_weights = self.global_model.state_dict()
 
-            client_losses = []
-            client_gradients = []
-            # Each client performs a local update and returns gradients
-            for client in self.clients:
-                grads, avg_loss = client.local_update(global_weights, 0)
-                client_gradients.append(grads)
-                client_losses.append(avg_loss)
-                
-            # Construct G (gradient matrix) and F_T (loss vector)
-            G = client_gradients  # List of gradients from each client
-            F_T = client_losses   # List of losses from each client
-
+            # Perform initial client updates to gather gradients and losses
+            client_gradients, client_losses = self._gather_client_updates(global_weights, 0)
+            G, F_T = client_gradients, client_losses
             G_next = G
+            F_T_next = F_T
+
             for epoch in range(self.total_epochs):
-                beta = beta_vec[i]
                 print(f"Epoch {epoch+1}/{self.total_epochs}")
 
+                # Perform backtracking line search for alpha
+                alpha = self._line_search_alpha(alpha, G, F_T, w, num_clients, c_alpha, rho_alpha, epoch, max_line_search_iterations_alpha)
+                print(f"alpha: {alpha}")
 
-                # Backtracking Line Search for alpha
-                alpha = alpha_vec[i]
-                params_new = {key: val.clone() for key, val in self.global_model.state_dict().items()} # Not sure about this.
-                # Armijo condition
-                c = 1e-4
-                rho = 0.5
-                for _ in range(0):
-                    # Compute aggregated gradient
-                    agg_grad_vector = []
-                    with torch.no_grad():
-                        for param_idx, (name, param) in enumerate(self.global_model.named_parameters()):
-                            # Initialize the aggregated gradient
-                            agg_grad = torch.zeros_like(param.data)
-                            # Aggregate gradients weighted by w
-                            for client_idx in range(num_clients):
-                                grad = G[client_idx][param_idx]
-                                agg_grad += w[client_idx] * grad
-                            params_new[name] = param - alpha * agg_grad  # Update rule
-                            agg_grad_vector.append(agg_grad)
+                # Update global model using G and weights w
+                params_copy = {key: val.clone() for key, val in self.global_model.state_dict().items()}
+                self._theta_update(G, G_next, F_T_next, w, alpha, epoch)
+                avg_loss_before_weight_update = sum(F_T_next) / num_clients
 
-                    # Evaluate new loss without updating local models or computing gradients
-                    new_client_losses = []
-                    for client in self.clients:
-                        _, avg_loss = client.local_update(params_new, epoch, return_avg_loss=True, compute_gradient=False)
-                        new_client_losses.append(avg_loss)
-                    L_new = np.mean(new_client_losses)
-                    L_old = np.mean(F_T)
+                # Update weights and gather new client updates
+                avg_loss_after_weight_upadate, w = self._weight_update(G, G_next, F_T, w, beta, lambda_range[epoch], is_ftotal,
+                                                                       max_line_search_iterations_beta, c_beta, rho_beta)
 
-                    agg_grad_tensor = [tensor.view(-1) for tensor in agg_grad_vector]
-                    agg_grad_tensor = torch.concat(agg_grad_tensor)
+                self._theta_update(G, G_next, F_T_next, w, alpha, epoch, params_copy)
 
-                    lhs = L_new
-                    rhs = L_old - c * alpha * np.linalg.norm(agg_grad_tensor) ** 2  # agg_grad_vector is the flattened agg_grad
-                    if lhs <= rhs:
-                        break
-                    else:
-                        alpha *= rho
-                else:
-                    print("Line search for alpha failed to find a suitable step size.")
-                    # You can decide whether to continue with current alpha or stop
-
-
-
-                for inner_theta_iteration in range(inner_iteration_range):
-                    ######################################
-                    # Update the global model using G and w
-                    client_losses = []
-                    client_gradients = []
-                    G = G_next # Not sure.
-                    if( inner_theta_iteration + 1 == inner_iteration_range ):
-                        params_copy = {key: val.clone() for key, val in self.global_model.state_dict().items()} # Not sure about this.
-                    with torch.no_grad():
-                        for param_idx, param in enumerate(self.global_model.parameters()):
-                            # Initialize the aggregated gradient
-                            agg_grad = torch.zeros_like(param.data)
-                            # Aggregate gradients weighted by w
-                            for client_idx in range(num_clients):
-                                grad = G[client_idx][param_idx]
-                                agg_grad += w[client_idx] * grad
-                            # Update global parameters
-                            param -= alpha * agg_grad  # Update rule
-                    #######################################
-
-                    #######################################
-                    # Each client performs a local update and returns gradients
-                    global_weights = self.global_model.state_dict()
-                    for client in self.clients:
-                        if inner_theta_iteration + 1 != inner_iteration_range:
-                            grads, _ = client.local_update(global_weights, epoch, False)
-                        else:
-                            grads, avg_loss = client.local_update(global_weights, epoch, True)
-                        client_losses.append(avg_loss)
-                        client_gradients.append(grads)
-
-                    # alpha *= alpha_decay_param
-                    # Construct G (gradient matrix) and F_T (loss vector)
-                    G_next = client_gradients  # List of gradients from each client
-                F_T_next = client_losses   # List of losses from each client
-                # Print the average loss across clients
-                avg_loss = sum(F_T_next) / num_clients
-                print(f"Average Loss After Theta Update: {avg_loss}")
-
-                # alpha = alpha_vec[i] # Reset
-
-                G_flat = self._flatten_tensors(G)
-                for inner_w_iteration in range(inner_iteration_range):
-                    # Calculate m_next for each client
-                    G_next_flat = self._flatten_tensors(G_next)
-                    w_tensor = torch.tensor(w).to(device).to(torch.float32)
-                    F_T_next_tensor = torch.tensor(F_T_next).to(device).to(torch.float32)
-
-                    G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-                    # G_T_G_next += 1e-4 * torch.eye(G_T_G_next.shape[0])
-
-                    G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
-
-                    c = 1e-2
-                    rho = 0.5
-                    for _ in range(1):
-                        if is_ftotal:
-                            m_next = (w_tensor + beta * alpha * G_T_G_next_w - beta * F_T_next_tensor).tolist()
-                        else:
-                            m_next = (w_tensor + beta * alpha * G_T_G_next_w).tolist()
-
-                        # w_next_normalize = self._sparse_projection_onto_simplex(m_next, lambda_range[epoch])
-                        # self.list_w_next[counter].append(w_next_normalize)
-                        # Project onto simplex
-                        w_next_normalize = self._sparse_projection_onto_simplex(m_next, lambda_range[epoch])
-
-                        # Compute surrogate loss or criterion
-                        # Since we may not have an explicit loss function for w, you might define a custom criterion
-                        # For example, the norm of the change in w
-
-                        f_new = 0.5 * np.linalg.norm(np.array(w_next_normalize) - np.array(m_next)) ** 2
-                        f_current = 0.5 * np.linalg.norm(np.array(w) - np.array(m_next))**2
-
-                        grad_f_T = np.transpose(np.array(w) - np.array(m_next))
-                        armijo_condition = f_new <= f_current + c * beta * grad_f_T @ (np.array(w_next_normalize) - np.array(w))
-
-                        # rhs = np.linalg.norm(np.array(w) - np.array(m_next)) ** 2 + c * beta * np.matmul((np.array(w) - np.array(m_next)).transpose(), np.array(np.array(w_next_normalize) - np.array(w)))
-                        if armijo_condition:
-                            break
-                        else:
-                            beta *= rho
-                    else:
-                        print("Line search for beta failed to find a suitable step size.")
-                        # Decide whether to proceed or adjust beta differently
-
-                    self.list_m_next[counter].append(m_next)
-                    self.list_w_next[counter].append(w_next_normalize)
-
-
-                    # Calculate G_next, F_T_next
-                    w = w_next_normalize
-                    with torch.no_grad():
-                        for param_idx, (name, param) in enumerate(self.global_model.named_parameters()):
-                            # Initialize the aggregated gradient
-                            agg_grad = torch.zeros_like(param.data)
-                            # Aggregate gradients weighted by w
-                            for client_idx in range(num_clients):
-                                grad = G[client_idx][param_idx]
-                                agg_grad += w[client_idx] * grad
-                            # Update global parameters
-                            param.data = params_copy[name].data - alpha * agg_grad  # Update rule, Not sure!
-
-                    client_losses = []
-                    client_gradients = []
-                    global_weights = self.global_model.state_dict()
-                    for client in self.clients:
-                        grads, avg_loss = client.local_update(global_weights, epoch, True)
-                        client_losses.append(avg_loss)
-                        client_gradients.append(grads)
-                    G_next = client_gradients
-                    F_T_next = client_losses
-                    
-                    # alpha *= alpha_decay_param
-                    # beta *= beta_decay_param
-
-                avg_loss = sum(F_T_next) / num_clients
-                print(f"Average Loss After Weights Update: {avg_loss}")
+                print(f"Average Loss Before Weights Update: {avg_loss_before_weight_update}")
+                print(f"Average Loss After Weights Update: {avg_loss_after_weight_upadate}")
                 print(f"Sparse_Weight: {w}")
-                G = G_next
-                F_T = F_T_next
-                #######################################
 
-    def _norm_calculate(self, m_next, lambda_value, is_norm_one=True):
-        index_order = [f for f, value in enumerate(m_next) if value > lambda_value]
-        w_next = [0] * len(m_next)
-        for i in range(len(index_order)):
-            w_next[index_order[i]] = m_next[index_order[i]]
-            if is_norm_one:
-                w_next[index_order[i]] -= lambda_value
-        return w_next
+                # Update gradients and losses for the next epoch
+                G, F_T = G_next, F_T_next
+
+    def _gather_client_updates(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
+        """Gathers initial client gradients and losses."""
+        client_gradients = []
+        client_losses = []
+        for client in self.clients:
+            grads, avg_loss = client.local_update(global_weights, epoch, return_avg_loss, compute_gradient)
+            client_gradients.append(grads)
+            client_losses.append(avg_loss)
+        return client_gradients, client_losses
+
+    def _line_search_alpha(self, alpha, G, F_T, w, num_clients, c, rho, epoch, max_iteration=3):
+        """Performs line search for alpha using Armijo condition."""
+        params_new = {key: val.clone() for key, val in self.global_model.state_dict().items()}
+        for _ in range(max_iteration):  # Maximum iterations for line search
+            agg_grad_vector = []
+            with torch.no_grad():
+                for param_idx, (name, param) in enumerate(self.global_model.named_parameters()):
+                    # Initialize the aggregated gradient
+                    agg_grad = torch.zeros_like(param.data)
+                    # Aggregate gradients weighted by w
+                    for client_idx in range(num_clients):
+                        grad = G[client_idx][param_idx]
+                        agg_grad += w[client_idx] * grad
+                    params_new[name] = param - alpha * agg_grad  # Update rule
+                    agg_grad_vector.append(agg_grad)
+
+            # Evaluate new loss
+            new_client_losses = self._gather_client_updates(params_new, epoch, return_avg_loss=True, compute_gradient=False)[1]
+            L_new, L_old = np.mean(new_client_losses), np.mean(F_T)
+            agg_grad_tensor = torch.cat([tensor.view(-1) for tensor in agg_grad_vector])
+
+            if L_new <= L_old - c * alpha * torch.norm(agg_grad_tensor) ** 2:
+                return alpha
+            alpha *= rho
+        if max_iteration != 0:
+            print("Line search for alpha failed.")
+        return alpha
+
+    def _theta_update(self, G, G_next, F_T_next, w, alpha, epoch, params_copy=None):
+        """Performs theta updates for the global model."""
+        num_clients = len(self.clients)
+        with torch.no_grad():
+            for param_idx, (name, param) in enumerate(self.global_model.named_parameters()):
+                # Initialize the aggregated gradient
+                agg_grad = torch.zeros_like(param.data)
+                # Aggregate gradients weighted by w
+                for client_idx in range(num_clients):
+                    grad = G[client_idx][param_idx]
+                    agg_grad += w[client_idx] * grad
+                param.data =  param.data - alpha * agg_grad if params_copy is None else params_copy[name].data - alpha * agg_grad
+
+        global_weights = self.global_model.state_dict()
+        client_gradients, client_losses = self._gather_client_updates(global_weights, epoch, True, True)
+
+        G_next[:] = client_gradients
+        F_T_next[:] = client_losses
+
+    def _weight_update(self, G, G_next, F_T_next, w, beta, lambda_value, is_ftotal, max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6):
+        """Performs weight updates with backtracking line search for w."""
+        num_clients = len(self.clients)
+        G_flat = self._flatten_tensors(G)
+        G_next_flat = self._flatten_tensors(G_next)
+        w_tensor = torch.tensor(w, dtype=torch.float32, device=device)
+        F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=device)
+        G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
+        G_T_G_next += eye_factor * torch.eye(G_T_G_next.shape[0])
+        G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
+
+        # Initial computation of m_next
+        m_next = w_tensor + beta * G_T_G_next_w - beta * F_T_next_tensor if is_ftotal else w_tensor + beta * G_T_G_next_w
+        w_next_normalize = self._sparse_projection_onto_simplex(m_next.tolist(), lambda_value)
+
+        # Perform line search to optimize beta
+        beta, w_next_normalize, m_next = self._line_search_for_beta(w_tensor, m_next, w_next_normalize, beta, G_T_G_next_w, F_T_next_tensor, 
+                                                                    is_ftotal, lambda_value, max_line_search_iterations, c_beta, rho_beta)
+
+        self.list_m_next[-1].append(m_next)
+        self.list_w_next[-1].append(w_next_normalize)
+        print(f"beta: {beta}")
+
+        avg_loss = sum(F_T_next_tensor.tolist()) / num_clients
+        return avg_loss, w_next_normalize
+
+    def _line_search_for_beta(self, w_tensor, m_next, w_next_normalize, beta, G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, max_line_search_iterations, c_beta, rho_beta):
+        """Performs backtracking line search for beta to optimize the weight update."""
+        for _ in range(max_line_search_iterations):  # Maximum iterations for line search
+            # Compute criterion for Armijo condition
+            f_new = 0.5 * torch.norm(torch.tensor(w_next_normalize) - m_next) ** 2
+            f_current = 0.5 * torch.norm(w_tensor - m_next) ** 2
+            grad_f_T = (w_tensor - m_next).T
+            armijo_condition = f_new <= f_current + c_beta * beta * grad_f_T @ (torch.tensor(w_next_normalize) - w_tensor)
+
+            if armijo_condition:
+                break
+            else:
+                beta *= rho_beta
+                # Recompute m_next with the updated beta
+                m_next = w_tensor + beta * G_T_G_next_w - beta * F_T_next_tensor if is_ftotal else w_tensor + beta * G_T_G_next_w
+                w_next_normalize = self._sparse_projection_onto_simplex(m_next.tolist(), lambda_value)
+        else:
+            if max_line_search_iterations != 0:
+                print("Line search for beta failed.")
+
+        return beta, w_next_normalize, m_next
 
     def _sparse_projection_onto_simplex(self, m_next, lambda_value):
-        w = sorted(m_next, reverse=True)
-        index_order = np.flip(np.argsort(m_next))
-        index_order_1 = [f for f, value in enumerate(w) if value > lambda_value]
-        P_L_lambda = [w[i] for i in index_order_1]
+        # Sort m_next in descending order
+        sorted_m = np.sort(m_next)[::-1]
+        indices = np.argsort(m_next)[::-1]
 
-        if len(P_L_lambda) == 0:
-            return  [0] * len(w)
+        # Identify elements greater than lambda_value
+        valid_indices = np.abs(sorted_m) > lambda_value
+        if not np.any(valid_indices):
+            return [0] * len(m_next)
 
+        # Compute the cumulative sum of valid elements
+        P_L_lambda = sorted_m[valid_indices]
         cumulative_sum = np.cumsum(P_L_lambda)
-        condition = P_L_lambda > (cumulative_sum - 1) / np.arange(1, len(P_L_lambda) + 1)
-        if np.any(condition):
-            rho = np.max(np.where(condition)[0] + 1)
-            etha = 1 / rho * (cumulative_sum[rho - 1] - 1)
+        rho_candidates = (P_L_lambda > (cumulative_sum - 1) / np.arange(1, len(P_L_lambda) + 1))
+
+        # Determine the value of rho and etha
+        if np.any(rho_candidates):
+            rho = np.max(np.where(rho_candidates)[0]) + 1
+            etha = (cumulative_sum[rho - 1] - 1) / rho
         else:
-            # raise Exception("Rho is empty!")
             etha = cumulative_sum[-1] / len(P_L_lambda)
 
-        P_L_lambda_ehta = P_L_lambda - etha
-        P_plus = np.clip(P_L_lambda_ehta, 0, max(P_L_lambda_ehta)).tolist()
-        beta_S = [0] * len(w)
+        # Compute the projection onto the simplex
+        P_plus = np.maximum(P_L_lambda - etha, 0)
+        projected_w = np.zeros(len(m_next))
+        projected_w[indices[valid_indices]] = P_plus
 
-        for i in range(len(index_order_1)):
-            beta_S[index_order_1[i]] = P_plus[i]
-
-        w_final = [0] * len(w)
-        for i in range(len(index_order)):
-            w_final[index_order[i]] = beta_S[i]
-
-        return w_final
-
-    def _normalize(self, w_next):
-        w_norm_one = sum(w_next)
-        if w_norm_one != 0:
-            w_next_normalize = [e / w_norm_one for e in w_next]
-        else:
-            w_next_normalize = [1.0 / len(w_next)] * len(w_next)
-
-        return w_next_normalize
+        return projected_w.tolist()
 
 if __name__ == "__main__":
-    # Initialize server and start federated learning
-    num_clients = 10  # Total number of clients
-    fraction_malicious = 0.3  # Fraction of malicious clients (e.g., 40%)
-    attack_epoch = 0  # Malicious clients start label-flipping after this epoch
-    total_epochs = 30  # Total number of epochs
-    n_max = 4  # Maximum number of non malicious clients
-    alpha_vec = [0.25]  # Alpha vector
-    beta_vec = [0.025]  # Beta vector
-    server = Server(num_clients=num_clients, fraction_malicious=fraction_malicious, attack_epoch=attack_epoch, total_epochs=total_epochs, n_max=n_max)
-    server.federated_learning(alpha_vec=alpha_vec, beta_vec=beta_vec, is_ftotal=True, lambda_val=(0, 0.05, 20), is_norm_one=True,
-                              inner_iteration_range=1, alpha_decay_param=0.9, beta_decay_param=0.9)
+    num_clients = 10
+    fraction_malicious = 0.3
+    attack_epoch = 6
+    total_epochs = 30
+    alpha_vec = [0.25]
+    beta_vec = [0.025]
+    server = Server(num_clients, fraction_malicious, attack_epoch, total_epochs)
+    server.federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, 20),
+                              c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
+                              c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
