@@ -60,26 +60,81 @@ class Client:
         return grads, avg_loss
 
 class Server:
-    def __init__(self, num_clients, fraction_malicious, attack_epoch=0, total_epochs=5):
+    def __init__(self, num_clients, fraction_malicious, attack_epoch=0, total_epochs=5, q_factor=0.1):
         self.global_model = ThreeLayerFC().to(device)
-        self.clients = self._initialize_clients(num_clients, fraction_malicious, attack_epoch)
+        self.num_clients = 0
+        self.clients = self._initialize_clients(num_clients, fraction_malicious, attack_epoch, q_factor)
         self.total_epochs = total_epochs
         self.list_m_next = []
         self.list_w_next = []
 
-    def _initialize_clients(self, num_clients, fraction_malicious, attack_epoch):
+    def _initialize_clients(self, num_clients, fraction_malicious, attack_epoch, q_factor):
+        self.num_clients = num_clients
         transform = transforms.Compose([transforms.ToTensor()])
         train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-        num_items = len(train_dataset) // num_clients
-        indices = np.random.permutation(len(train_dataset))
-        client_indices = [indices[i * num_items:(i + 1) * num_items] for i in range(num_clients)]
-        client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, idx), batch_size=128, shuffle=True) for idx in client_indices]
+        num_label = max(train_dataset.targets.tolist()) + 1
+        client_loaders = self._distribute_dataset(train_dataset, num_label, q_factor)
 
         num_malicious = int(fraction_malicious * num_clients)
         malicious_ids = random.sample(range(num_clients), num_malicious)
         print(f"Malicious Client Indices: {malicious_ids}")
 
         return [Client(i, client_loaders[i], malicious=(i in malicious_ids), attack_epoch=attack_epoch) for i in range(num_clients)]
+    
+    def _split(self, a, n):
+        k, m = divmod(len(a), n)
+        return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
+        
+    def _distribute_dataset(self, train_dataset, num_label, q_factor):
+        num_group = num_label
+
+        # Indice Labels
+        label2idx = {}
+        for i in range(num_label):
+            label2idx[str(i)] = np.where(train_dataset.targets == i)[0]
+
+        # Indice Group
+        group2client_idx = []
+        for i in range(num_group):
+            group2client_idx.extend([i] * int(self.num_clients/num_group))
+        if len(group2client_idx) < self.num_clients:
+            group2client_idx.extend([num_group - 1] * (self.num_clients - len(group2client_idx)))
+        random.shuffle(group2client_idx)
+
+        # Construct Group to Data Index
+        group2data_idx = []
+        for i in range(num_group):
+            group2data_idx.append([])
+
+        for i in range(num_group):
+            perm_idx = np.random.permutation(len(label2idx[str(i)]))
+            q_group_idx, q_group_compliment_idx = perm_idx[:int(len(perm_idx) * q_factor)], perm_idx[int(len(perm_idx) * q_factor):]
+            group2data_idx[i].extend(label2idx[str(i)][q_group_idx.tolist()])
+
+            if len(q_group_compliment_idx) > 0:
+                q_group_compliment_per_rest_idx = [e for e in self._split(q_group_compliment_idx, num_group - 1)]
+                counter = 0
+                for j in range(num_group):
+                    if j != i:
+                        group2data_idx[j].extend(label2idx[str(i)][q_group_compliment_per_rest_idx[counter].tolist()])
+                        counter += 1            
+
+        for sublist in group2data_idx:
+            random.shuffle(sublist) 
+
+        # Construct Clinet to Data Index
+        client2data_idx = {}
+        for i in range(num_group):
+            client_per_group_idx = np.where(np.array(group2client_idx) == i)[0]
+            num_client_per_group = sum(np.array(group2client_idx) == i)
+            indices = group2data_idx[i]
+            list_clients = [e for e in self._split(indices, num_client_per_group)]
+            for j, c in enumerate(client_per_group_idx):
+                client2data_idx[str(c)] = list_clients[j]
+        
+        client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, client2data_idx[str(i)]), batch_size=128, shuffle=True) for i in range(self.num_clients)]
+
+        return client_loaders
 
     def _flatten_tensors(self, input_list):
         flattened = [torch.cat([tensor.view(-1) for tensor in tensors]) for tensors in input_list]
@@ -279,7 +334,8 @@ if __name__ == "__main__":
     total_epochs = 30
     alpha_vec = [0.25]
     beta_vec = [0.025]
-    server = Server(num_clients, fraction_malicious, attack_epoch, total_epochs)
+    q_factor = 0.9
+    server = Server(num_clients, fraction_malicious, attack_epoch, total_epochs, q_factor)
     server.federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, 20),
                               c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
                               c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
