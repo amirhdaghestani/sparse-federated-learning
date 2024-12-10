@@ -20,31 +20,150 @@ class ThreeLayerFC(nn.Module):
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
 
-# Function to flip labels for malicious clients
-def flip_labels(labels):
-    return 9 - labels
+# LeNet-5 Convolutional Model
+class PyTorchLeNet5(torch.nn.Module):
+    def __init__(self, num_classes, grayscale=False):
+        super().__init__()
+        
+        self.grayscale = grayscale
+        self.num_classes = num_classes
+
+        if self.grayscale:
+            in_channels = 1
+        else:
+            in_channels = 3
+
+        self.features = torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels, 6, kernel_size=5),
+            torch.nn.Tanh(),
+            torch.nn.MaxPool2d(kernel_size=2),
+            torch.nn.Conv2d(6, 16, kernel_size=5),
+            torch.nn.Tanh(),
+            torch.nn.MaxPool2d(kernel_size=2)
+        )
+
+        self.classifier = torch.nn.Sequential(
+            torch.nn.Linear(16*5*5, 120),
+            torch.nn.Tanh(),
+            torch.nn.Linear(120, 84),
+            torch.nn.Tanh(),
+            torch.nn.Linear(84, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = torch.flatten(x, start_dim=1)
+        logits = self.classifier(x)
+        return logits
+
+class SimpleCNNWithBatchNorm(nn.Module):
+    def __init__(self):
+        super(SimpleCNNWithBatchNorm, self).__init__()
+
+        # Define convolutional layers with Batch Normalization
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, stride=1, padding=1)  # 28x28 -> 28x28
+        self.bn1 = nn.BatchNorm2d(32)  # Batch normalization for 32 channels
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)  # 28x28 -> 28x28
+        self.bn2 = nn.BatchNorm2d(64)  # Batch normalization for 64 channels
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)  # 28x28 -> 14x14
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(64 * 7 * 7, 128)  # Flattened input size: 64 feature maps of 14x14
+
+        #self.dropout = nn.Dropout(0.5)  # Dropout with 50% probability
+        self.fc2 = nn.Linear(128, 10)  #Output size: 10 classes
+
+    def forward(self, x):
+        # Convolutional layers with BatchNorm, ReLU, and pooling
+        x = self.pool(torch.relu(self.bn1(self.conv1(x)))) # Conv1 -> BatchNorm -> ReLU -> Pooling
+        x = self.pool(torch.relu(self.bn2(self.conv2(x)))) # Conv2 -> BatchNorm -> ReLU -> Pooling
+
+        # Flatten the feature maps for the fully connected layers
+        x = x.view(x.size(0), -1)  #Flatten
+
+        # Fully connected layers
+        x = torch.relu(self.fc1(x))
+
+        #x = self.dropout(x)
+        x = self.fc2(x)  # No activation for the output layer (used for classification)
+
+        return x
+
+class Attack:
+    # Function to flip labels for malicious clients
+    def flip_labels(*args, **kwargs):
+        return kwargs['data'], 9 - kwargs['target']
+
+    def boost_gradient(*args, **kwargs):
+        return [kwargs['boost_factor'] * grad for grad in kwargs['grads']]
+
+    def gaussian_attack(*args, **kwargs):
+        return [torch.normal(mean=kwargs['gaussian_attack_mean'], std=kwargs['gaussian_attack_std'], size=grad.shape).to(device) for grad in kwargs['grads']]
+
+    def gaussian_additive_attack(*args, **kwargs):
+        if kwargs['gaussian_additive_attack_is_split']:
+            return [grad + torch.normal(mean=0, std=kwargs['gaussian_additive_attack_std_factor'] * torch.std(grad), size=grad.shape).to(device) for grad in kwargs['grads']]
+        
+        original_shapes = [grad.shape for grad in kwargs['grads']]
+        grads_concat = torch.concat([grad.view(-1) for grad in kwargs['grads']]).to(device)
+        std_concat = torch.std(grads_concat)
+        additive_noise = torch.normal(mean=0, std=kwargs['gaussian_additive_attack_std_factor'] * std_concat, size=grads_concat.shape)
+        grads_concat = grads_concat + additive_noise
+
+        split_size = [torch.prod(torch.tensor(shape)).item() for shape in original_shapes]
+        return [split.view(shape).to(device) for split, shape in zip(torch.split(grads_concat, split_size), original_shapes)]
+
+    def lie_attack(*args, **kwargs):
+        return [torch.normal(mean=torch.mean(grad) + kwargs['lie_attack_factor'] * torch.std(grad), std=torch.std(grad), size=grad.shape).to(device) for grad in kwargs['grads']]
+
+    def __call__(attack_func, *args, **kwargs):
+        return attack_func(*args, **kwargs)
 
 class Client:
-    def __init__(self, client_id, data_loader, malicious=False, attack_epoch=0):
+    ATTACK_ON_DATA = ['flip_labels']
+    ATTACK_ON_GRADIENT = ['boost_gradient', 'gaussian_attack', 'gaussian_additive_attack', 'lie_attack']
+
+    def __init__(self, client_id, model, data_loader, malicious=False, attack_args=None):
         self.client_id = client_id
+        self.model = model
         self.data_loader = data_loader
         self.malicious = malicious
-        self.attack_epoch = attack_epoch
+        self.attack_args = attack_args
+
+        if malicious and attack_args is None:
+            raise Exception("attack_args is not provided.")
+
+        if attack_args is not None:
+            self.attack_type = attack_args['attack_type']
+            self.attack_epoch = attack_args['attack_epoch']
+
+            if self.attack_type == 'flip_labels':
+                self.attack_func = Attack.flip_labels
+            elif self.attack_type == 'boost_gradient':
+                self.attack_func = Attack.boost_gradient
+            elif self.attack_type == 'gaussian_attack':
+                self.attack_func = Attack.gaussian_attack
+            elif self.attack_type == 'gaussian_additive_attack':
+                self.attack_func = Attack.gaussian_additive_attack
+            elif self.attack_type == 'lie_attack':
+                self.attack_func = Attack.lie_attack
 
     def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
-        local_model = ThreeLayerFC().to(device)
+        local_model = self.model.to(device)
         local_model.load_state_dict(global_weights)
         local_model.train()
 
         total_loss = 0
         num_batches = 0
 
+        condition = self.malicious and epoch >= self.attack_epoch
+
         for data, target in self.data_loader:
             data, target = data.to(device), target.to(device)
 
-            # If the client is malicious and the current epoch >= attack_epoch, apply label flipping
-            if self.malicious and epoch >= self.attack_epoch:
-                target = flip_labels(target)
+            if condition and self.attack_type in self.ATTACK_ON_DATA:
+                # If the client is malicious and the current epoch >= attack_epoch, apply attack on input data
+                data, target = self.attack_func(data=data, target=target)
 
             output = local_model(data)
             loss = nn.CrossEntropyLoss()(output, target)
@@ -57,21 +176,31 @@ class Client:
         avg_loss = total_loss / num_batches if return_avg_loss else None
         grads = [param.grad.clone() / num_batches for param in local_model.parameters()] if compute_gradient else None
 
+        if condition and self.attack_type in self.ATTACK_ON_GRADIENT:
+            grads = self.attack_func(grads=grads, **self.attack_args)
+
         return grads, avg_loss
 
 class Server:
-    def __init__(self, num_clients, fraction_malicious, attack_epoch=0, total_epochs=5, q_factor=0.1):
-        self.global_model = ThreeLayerFC().to(device)
+    def __init__(self, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2):
+        self.global_model = model.to(device)
         self.num_clients = 0
-        self.clients = self._initialize_clients(num_clients, fraction_malicious, attack_epoch, q_factor)
+        self.test_dataset = None
+        self.clients = self._initialize_clients(num_clients, model, fraction_malicious, attack_args, q_factor)
         self.total_epochs = total_epochs
+        self.evaluate_each_epoch = evaluate_each_epoch
         self.list_m_next = []
         self.list_w_next = []
 
-    def _initialize_clients(self, num_clients, fraction_malicious, attack_epoch, q_factor):
+    def _initialize_clients(self, num_clients, model, fraction_malicious, attack_args, q_factor):
         self.num_clients = num_clients
         transform = transforms.Compose([transforms.ToTensor()])
-        train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+        dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+        train_size = int(len(dataset) * 0.9)
+        train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, len(dataset) - train_size])
+        train_dataset = train_dataset.dataset
+        test_dataset = test_dataset.dataset
+        self.test_dataset = test_dataset
         num_label = max(train_dataset.targets.tolist()) + 1
         client_loaders = self._distribute_dataset(train_dataset, num_label, q_factor)
 
@@ -79,7 +208,7 @@ class Server:
         malicious_ids = random.sample(range(num_clients), num_malicious)
         print(f"Malicious Client Indices: {malicious_ids}")
 
-        return [Client(i, client_loaders[i], malicious=(i in malicious_ids), attack_epoch=attack_epoch) for i in range(num_clients)]
+        return [Client(i, model, client_loaders[i], malicious=(i in malicious_ids), attack_args=attack_args) for i in range(num_clients)]
     
     def _split(self, a, n):
         k, m = divmod(len(a), n)
@@ -172,26 +301,30 @@ class Server:
                 print(f"Epoch {epoch+1}/{self.total_epochs}")
 
                 # Perform backtracking line search for alpha
-                alpha = self._line_search_alpha(alpha, G, F_T, w, num_clients, c_alpha, rho_alpha, epoch, max_line_search_iterations_alpha)
+                alpha = self._line_search_alpha(alpha, G, F_T_next, w, num_clients, c_alpha, rho_alpha, epoch, max_line_search_iterations_alpha)
                 print(f"alpha: {alpha}")
 
                 # Update global model using G and weights w
                 params_copy = {key: val.clone() for key, val in self.global_model.state_dict().items()}
                 self._theta_update(G, G_next, F_T_next, w, alpha, epoch)
-                avg_loss_before_weight_update = sum(F_T_next) / num_clients
+                avg_loss_before_weight_update = np.matmul(np.transpose(np.array(F_T_next)), np.array(w))
 
                 # Update weights and gather new client updates
-                avg_loss_after_weight_upadate, w = self._weight_update(G, G_next, F_T, w, beta, lambda_range[epoch], is_ftotal,
-                                                                       max_line_search_iterations_beta, c_beta, rho_beta)
+                w = self._weight_update(G, G_next, F_T_next, w, alpha, beta, lambda_range[epoch], is_ftotal,
+                                        max_line_search_iterations_beta, c_beta, rho_beta)
 
                 self._theta_update(G, G_next, F_T_next, w, alpha, epoch, params_copy)
+                avg_loss_after_weight_update = np.matmul(np.transpose(np.array(F_T_next)), np.array(w))
 
                 print(f"Average Loss Before Weights Update: {avg_loss_before_weight_update}")
-                print(f"Average Loss After Weights Update: {avg_loss_after_weight_upadate}")
+                print(f"Average Loss After Weights Update: {avg_loss_after_weight_update}")
                 print(f"Sparse_Weight: {w}")
 
                 # Update gradients and losses for the next epoch
-                G, F_T = G_next, F_T_next
+                G = G_next
+
+                if epoch % self.evaluate_each_epoch == 0:
+                    self.calculate_accuracy()
 
     def _gather_client_updates(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
         """Gathers initial client gradients and losses."""
@@ -250,7 +383,7 @@ class Server:
         G_next[:] = client_gradients
         F_T_next[:] = client_losses
 
-    def _weight_update(self, G, G_next, F_T_next, w, beta, lambda_value, is_ftotal, max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6):
+    def _weight_update(self, G, G_next, F_T_next, w, alpha, beta, lambda_value, is_ftotal, max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6):
         """Performs weight updates with backtracking line search for w."""
         num_clients = len(self.clients)
         G_flat = self._flatten_tensors(G)
@@ -262,21 +395,20 @@ class Server:
         G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
 
         # Initial computation of m_next
-        m_next = w_tensor + beta * G_T_G_next_w - beta * F_T_next_tensor if is_ftotal else w_tensor + beta * G_T_G_next_w
+        m_next = w_tensor + alpha * beta * G_T_G_next_w - beta * F_T_next_tensor if is_ftotal else w_tensor + alpha * beta * G_T_G_next_w
         w_next_normalize = self._sparse_projection_onto_simplex(m_next.tolist(), lambda_value)
 
         # Perform line search to optimize beta
-        beta, w_next_normalize, m_next = self._line_search_for_beta(w_tensor, m_next, w_next_normalize, beta, G_T_G_next_w, F_T_next_tensor, 
+        beta, w_next_normalize, m_next = self._line_search_for_beta(w_tensor, m_next, w_next_normalize, alpha, beta, G_T_G_next_w, F_T_next_tensor, 
                                                                     is_ftotal, lambda_value, max_line_search_iterations, c_beta, rho_beta)
 
         self.list_m_next[-1].append(m_next)
         self.list_w_next[-1].append(w_next_normalize)
         print(f"beta: {beta}")
 
-        avg_loss = sum(F_T_next_tensor.tolist()) / num_clients
-        return avg_loss, w_next_normalize
+        return w_next_normalize
 
-    def _line_search_for_beta(self, w_tensor, m_next, w_next_normalize, beta, G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, max_line_search_iterations, c_beta, rho_beta):
+    def _line_search_for_beta(self, w_tensor, m_next, w_next_normalize, alpha, beta, G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, max_line_search_iterations, c_beta, rho_beta):
         """Performs backtracking line search for beta to optimize the weight update."""
         for _ in range(max_line_search_iterations):  # Maximum iterations for line search
             # Compute criterion for Armijo condition
@@ -290,7 +422,7 @@ class Server:
             else:
                 beta *= rho_beta
                 # Recompute m_next with the updated beta
-                m_next = w_tensor + beta * G_T_G_next_w - beta * F_T_next_tensor if is_ftotal else w_tensor + beta * G_T_G_next_w
+                m_next = w_tensor + alpha * beta * G_T_G_next_w - beta * F_T_next_tensor if is_ftotal else w_tensor + alpha * beta * G_T_G_next_w
                 w_next_normalize = self._sparse_projection_onto_simplex(m_next.tolist(), lambda_value)
         else:
             if max_line_search_iterations != 0:
@@ -327,15 +459,46 @@ class Server:
 
         return projected_w.tolist()
 
+    def calculate_accuracy(self):
+        correct = 0
+        total = 0
+
+        # Ensure model is in evaluation mode
+        self.global_model.eval()
+
+        # Disable gradient calculations for evaluation
+        with torch.no_grad():
+            for inputs, labels in torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False):
+                # Move data to the same device as the model
+                inputs, labels = inputs.to(device), labels.to(device)
+
+                # Get model predictions
+                output = self.global_model(inputs)
+                predicted = torch.argmax(output, dim=1)
+
+                # Calculate number of correct predictions
+                correct += (predicted == labels).sum().item()
+                total += labels.size(0)
+
+        # Compute accuracy
+        accuracy = 100 * correct / total
+        print("Accuracy = {:.2f}%".format(accuracy))
+
+
 if __name__ == "__main__":
     num_clients = 10
-    fraction_malicious = 0.3
-    attack_epoch = 6
-    total_epochs = 30
-    alpha_vec = [0.25]
-    beta_vec = [0.025]
-    q_factor = 0.9
-    server = Server(num_clients, fraction_malicious, attack_epoch, total_epochs, q_factor)
+    fraction_malicious = 0.2
+    total_epochs = 20
+    alpha_vec = [0.025]
+    beta_vec = [0.01]
+    q_factor = 0.1
+    evaluate_each_epoch = 1
+    attack_args = {
+        "attack_type" : "flip_labels",
+        "attack_epoch" : 4
+    }
+    model = SimpleCNNWithBatchNorm()
+    server = Server(num_clients, fraction_malicious, attack_args, total_epochs, q_factor, model, evaluate_each_epoch)
     server.federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, 20),
                               c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
                               c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
