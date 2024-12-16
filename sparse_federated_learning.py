@@ -92,9 +92,16 @@ class SimpleCNNWithBatchNorm(nn.Module):
 
 class Attack:
     # Function to flip labels for malicious clients
+
+    # Attack on Data
     def flip_labels(*args, **kwargs):
         return kwargs['data'], 9 - kwargs['target']
 
+    # Attack on Parameters
+    def random_parameters(*args, **kwargs):
+        return {name: torch.normal(mean=kwargs['random_parameters_mean'], std=kwargs['random_parameters_std'], size=param.shape).to(device)for name, param in kwargs['global_weights'].items()}
+
+    # Attack on Gradient
     def boost_gradient(*args, **kwargs):
         return [kwargs['boost_factor'] * grad for grad in kwargs['grads']]
 
@@ -122,6 +129,7 @@ class Attack:
 
 class Client:
     ATTACK_ON_DATA = ['flip_labels']
+    ATTACK_ON_PARAMETRS = ['random_parameters']
     ATTACK_ON_GRADIENT = ['boost_gradient', 'gaussian_attack', 'gaussian_additive_attack', 'lie_attack']
 
     def __init__(self, client_id, model, data_loader, malicious=False, attack_args=None):
@@ -138,8 +146,13 @@ class Client:
             self.attack_type = attack_args['attack_type']
             self.attack_epoch = attack_args['attack_epoch']
 
+            # Attack on Data
             if self.attack_type == 'flip_labels':
                 self.attack_func = Attack.flip_labels
+            # Attack on Parameters
+            elif self.attack_type == 'random_parameters':
+                self.attack_func = Attack.random_parameters
+            # Attack on Gradient
             elif self.attack_type == 'boost_gradient':
                 self.attack_func = Attack.boost_gradient
             elif self.attack_type == 'gaussian_attack':
@@ -159,9 +172,15 @@ class Client:
 
         condition = self.malicious and epoch >= self.attack_epoch
 
+        # Attack on Parameters
+        if condition and self.attack_type in self.ATTACK_ON_PARAMETRS:
+            global_weights_random = self.attack_func(global_weights=global_weights, **self.attack_args)
+            local_model.load_state_dict(global_weights_random)
+
         for data, target in self.data_loader:
             data, target = data.to(device), target.to(device)
 
+            # Attack on Gradients
             if condition and self.attack_type in self.ATTACK_ON_DATA:
                 # If the client is malicious and the current epoch >= attack_epoch, apply attack on input data
                 data, target = self.attack_func(data=data, target=target)
@@ -177,33 +196,32 @@ class Client:
         avg_loss = total_loss / num_batches if return_avg_loss else None
         grads = [param.grad.clone() / num_batches for param in local_model.parameters()] if compute_gradient else None
 
+        # Attack on Gradient
         if condition and self.attack_type in self.ATTACK_ON_GRADIENT:
             grads = self.attack_func(grads=grads, **self.attack_args)
 
         return grads, avg_loss
 
 class Server:
-    def __init__(self, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2):
+    def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2):
         self.global_model = model.to(device)
         self.num_clients = 0
         self.test_dataset = None
-        self.clients = self._initialize_clients(num_clients, model, fraction_malicious, attack_args, q_factor)
+        self.clients = self._initialize_clients(dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor)
         self.total_epochs = total_epochs
         self.evaluate_each_epoch = evaluate_each_epoch
         self.list_m_next = []
         self.list_w_next = []
 
-    def _initialize_clients(self, num_clients, model, fraction_malicious, attack_args, q_factor):
+    def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor):
         self.num_clients = num_clients
-        transform = transforms.Compose([transforms.ToTensor()])
-        dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
-        train_size = int(len(dataset) * 0.9)
-        train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, len(dataset) - train_size])
-        train_dataset = train_dataset.dataset
-        test_dataset = test_dataset.dataset
-        self.test_dataset = test_dataset
-        num_label = max(train_dataset.targets.tolist()) + 1
-        client_loaders = self._distribute_dataset(train_dataset, num_label, q_factor)
+
+        # Assign datasets
+        self.train_dataset, self.test_dataset = self._load_dataset(dataset_name)
+
+        # Use the targets directly from train_dataset
+        num_label = max(self.train_dataset.targets.tolist()) + 1
+        client_loaders = self._distribute_dataset(self.train_dataset, num_label, q_factor)
 
         num_malicious = int(fraction_malicious * num_clients)
         malicious_ids = random.sample(range(num_clients), num_malicious)
@@ -211,11 +229,27 @@ class Server:
 
         return [Client(i, model, client_loaders[i], malicious=(i in malicious_ids), attack_args=attack_args) for i in range(num_clients)]
     
+    def _load_dataset(self, dataset_name):
+        if dataset_name == "MNIST":
+            transform = transforms.Compose([transforms.ToTensor()])
+            train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+            test_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
+        elif dataset_name == "EMNIST":
+            transform = transforms.Compose([transforms.ToTensor()])
+            split = 'balanced'
+            train_dataset = datasets.EMNIST('./data', train=True, split=split, download=True, transform=transform)
+            test_dataset = datasets.EMNIST('./data', train=False, split=split, download=True, transform=transform)
+
+        return train_dataset, test_dataset
+
     def _split(self, a, n):
         k, m = divmod(len(a), n)
         return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
         
     def _distribute_dataset(self, train_dataset, num_label, q_factor):
+        if self.num_clients < num_label:
+            raise Exception("Number of clients should be greater than the number of classes")
+
         num_group = num_label
 
         # Indice Labels
@@ -228,7 +262,8 @@ class Server:
         for i in range(num_group):
             group2client_idx.extend([i] * int(self.num_clients/num_group))
         if len(group2client_idx) < self.num_clients:
-            group2client_idx.extend([num_group - 1] * (self.num_clients - len(group2client_idx)))
+            np.random.permutation(num_group)
+            group2client_idx.extend(np.random.permutation(num_group).tolist()[:(self.num_clients - len(group2client_idx))])
         random.shuffle(group2client_idx)
 
         # Construct Group to Data Index
@@ -247,7 +282,7 @@ class Server:
                 for j in range(num_group):
                     if j != i:
                         group2data_idx[j].extend(label2idx[str(i)][q_group_compliment_per_rest_idx[counter].tolist()])
-                        counter += 1            
+                        counter += 1
 
         for sublist in group2data_idx:
             random.shuffle(sublist) 
@@ -270,62 +305,60 @@ class Server:
         flattened = [torch.cat([tensor.view(-1) for tensor in tensors]) for tensors in input_list]
         return torch.stack(flattened).T
 
-    def federated_learning(self, alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, None),
+    def federated_learning(self, alpha, beta, is_ftotal=True, lambda_val=(0, 0.05, None),
                            c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
                            c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=10):
 
-        # Ensure alpha_vec and beta_vec are lists
-        alpha_vec = [alpha_vec] if not isinstance(alpha_vec, list) else alpha_vec
-        beta_vec = [beta_vec] if not isinstance(beta_vec, list) else beta_vec
-        
         # Generate lambda_range
         num_steps = lambda_val[-1] if lambda_val[-1] else self.total_epochs
         lambda_range = np.linspace(lambda_val[0], lambda_val[1], num_steps).tolist()
         lambda_range += [lambda_val[1]] * max(0, self.total_epochs - len(lambda_range))
 
-        for i, (alpha, beta) in enumerate(zip(alpha_vec, beta_vec)):
-            self.list_m_next.append([])
-            self.list_w_next.append([])
-            num_clients = len(self.clients)
+        num_clients = len(self.clients)
 
-            # Initialize weights
-            w = [1.0 / num_clients] * num_clients
-            global_weights = self.global_model.state_dict()
+        # Initialize weights
+        w = [1.0 / num_clients] * num_clients
+        global_weights = self.global_model.state_dict()
 
-            # Perform initial client updates to gather gradients and losses
-            client_gradients, client_losses = self._gather_client_updates(global_weights, 0)
-            G, F_T = client_gradients, client_losses
-            G_next = G
-            F_T_next = F_T
+        # Perform initial client updates to gather gradients and losses
+        client_gradients, client_losses = self._gather_client_updates(global_weights, 0)
+        G, F_T = client_gradients, client_losses
+        G_next = G
+        F_T_next = F_T
 
-            for epoch in range(self.total_epochs):
-                print(f"Epoch {epoch+1}/{self.total_epochs}")
+        for epoch in range(self.total_epochs):
+            print(f"Epoch {epoch+1}/{self.total_epochs}")
 
-                # Perform backtracking line search for alpha
-                alpha = self._line_search_alpha(alpha, G, F_T_next, w, num_clients, c_alpha, rho_alpha, epoch, max_line_search_iterations_alpha)
-                print(f"alpha: {alpha}")
+            # Perform backtracking line search for alpha
+            alpha = self._line_search_alpha(alpha, G, F_T_next, w, num_clients, c_alpha, rho_alpha, epoch, max_line_search_iterations_alpha)
+            print(f"alpha: {alpha}")
 
-                # Update global model using G and weights w
-                params_copy = {key: val.clone() for key, val in self.global_model.state_dict().items()}
-                self._theta_update(G, G_next, F_T_next, w, alpha, epoch)
-                avg_loss_before_weight_update = np.matmul(np.transpose(np.array(F_T_next)), np.array(w))
+            # Update global model using G and weights w
+            params_copy = {key: val.clone() for key, val in self.global_model.state_dict().items()}
+            self._theta_update(G, G_next, F_T_next, w, alpha, epoch)
+            avg_loss_before_weight_update = np.matmul(np.transpose(np.array(F_T_next)), np.array(w))
 
-                # Update weights and gather new client updates
-                w = self._weight_update(G, G_next, F_T_next, w, alpha, beta, lambda_range[epoch], is_ftotal,
-                                        max_line_search_iterations_beta, c_beta, rho_beta)
+            # Update weights and gather new client updates
+            w = self._weight_update(G, G_next, F_T_next, w, alpha, beta, lambda_range[epoch], is_ftotal,
+                                    max_line_search_iterations_beta, c_beta, rho_beta)
 
-                self._theta_update(G, G_next, F_T_next, w, alpha, epoch, params_copy)
-                avg_loss_after_weight_update = np.matmul(np.transpose(np.array(F_T_next)), np.array(w))
+            self._theta_update(G, G_next, F_T_next, w, alpha, epoch, params_copy)
+            avg_loss_after_weight_update = np.matmul(np.transpose(np.array(F_T_next)), np.array(w))
 
-                print(f"Average Loss Before Weights Update: {avg_loss_before_weight_update}")
-                print(f"Average Loss After Weights Update: {avg_loss_after_weight_update}")
-                print(f"Sparse_Weight: {w}")
+            print(f"Average Loss Before Weights Update: {avg_loss_before_weight_update}")
+            print(f"Average Loss After Weights Update: {avg_loss_after_weight_update}")
+            print(f"Sparse_Weight: {w}")
 
-                # Update gradients and losses for the next epoch
-                G = G_next
+            # Update gradients and losses for the next epoch
+            G = G_next
 
-                if epoch % self.evaluate_each_epoch == 0:
-                    self.calculate_accuracy()
+            if epoch % self.evaluate_each_epoch == 0:
+                self.calculate_accuracy()
+
+        # Return Evaluation Metrics:
+            # Train: Loss, Accuracy
+            # Test: Loss, Accuracy
+            # Index of Zero Weights
 
     def _gather_client_updates(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
         """Gathers initial client gradients and losses."""
@@ -403,8 +436,8 @@ class Server:
         beta, w_next_normalize, m_next = self._line_search_for_beta(w_tensor, m_next, w_next_normalize, alpha, beta, G_T_G_next_w, F_T_next_tensor, 
                                                                     is_ftotal, lambda_value, max_line_search_iterations, c_beta, rho_beta)
 
-        self.list_m_next[-1].append(m_next)
-        self.list_w_next[-1].append(w_next_normalize)
+        self.list_m_next.append(m_next)
+        self.list_w_next.append(w_next_normalize)
         print(f"beta: {beta}")
 
         return w_next_normalize
@@ -461,45 +494,49 @@ class Server:
         return projected_w.tolist()
 
     def calculate_accuracy(self):
-        correct = 0
-        total = 0
+        def acc(dataset, label=""):
+            correct = 0
+            total = 0
 
-        # Ensure model is in evaluation mode
-        self.global_model.eval()
+            # Ensure model is in evaluation mode
+            self.global_model.eval()
 
-        # Disable gradient calculations for evaluation
-        with torch.no_grad():
-            for inputs, labels in torch.utils.data.DataLoader(self.test_dataset, batch_size=128, shuffle=False):
-                # Move data to the same device as the model
-                inputs, labels = inputs.to(device), labels.to(device)
+            # Disable gradient calculations for evaluation
+            with torch.no_grad():
+                for inputs, labels in torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=False):
+                    # Move data to the same device as the model
+                    inputs, labels = inputs.to(device), labels.to(device)
 
-                # Get model predictions
-                output = self.global_model(inputs)
-                predicted = torch.argmax(output, dim=1)
+                    # Get model predictions
+                    output = self.global_model(inputs)
+                    predicted = torch.argmax(output, dim=1)
 
-                # Calculate number of correct predictions
-                correct += (predicted == labels).sum().item()
-                total += labels.size(0)
+                    # Calculate number of correct predictions
+                    correct += (predicted == labels).sum().item()
+                    total += labels.size(0)
 
-        # Compute accuracy
-        accuracy = 100 * correct / total
-        print("Accuracy = {:.2f}%".format(accuracy))
+            # Compute accuracy
+            accuracy = 100 * correct / total
+            print(label + " Accuracy = {:.2f}%".format(accuracy))
 
+        for label, dataset in {"Train": self.train_dataset, "Test": self.test_dataset}.items():
+            acc(dataset, label)
 
 if __name__ == "__main__":
-    num_clients = 10
+    dataset_name = "MNIST"
+    num_clients = 50
     fraction_malicious = 0.2
-    total_epochs = 20
-    alpha_vec = [0.025]
-    beta_vec = [0.01]
-    q_factor = 0.1
+    total_epochs = 150
+    alpha_vec = 0.0081
+    beta_vec = 0.001
+    q_factor = 0.6
     evaluate_each_epoch = 1
     attack_args = {
         "attack_type" : "flip_labels",
-        "attack_epoch" : 4
+        "attack_epoch" : 20
     }
     model = SimpleCNNWithBatchNorm()
-    server = Server(num_clients, fraction_malicious, attack_args, total_epochs, q_factor, model, evaluate_each_epoch)
-    server.federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.05, 20),
-                              c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
-                              c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
+    server = Server(dataset_name, num_clients, fraction_malicious, attack_args, total_epochs, q_factor, model, evaluate_each_epoch)
+    server.federated_learning(alpha_vec, beta_vec, is_ftotal=True, lambda_val=(0, 0.01, 50),
+                                c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
+                                c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
