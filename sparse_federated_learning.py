@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 import random
 from torchvision import datasets, transforms
+import copy
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -149,7 +150,7 @@ class Client:
                 self.attack_func = Attack.lie_attack
 
     def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
-        local_model = self.model.to(device)
+        local_model = copy.deepcopy(self.model.to(device))
         local_model.load_state_dict(global_weights)
         local_model.train()
 
