@@ -1,5 +1,6 @@
 """ Server Class """
 import random
+import copy
 
 import numpy as np
 import torch
@@ -16,6 +17,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Server:
     def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2):
         self.global_model = model.to(device)
+        self.global_model_fedavg = copy.deepcopy(model).to(device)
         self.num_clients = 0
         self.test_dataset = None
         self.clients = self._initialize_clients(dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor)
@@ -39,10 +41,13 @@ class Server:
         print(f"Malicious Client Indices: {malicious_ids}")
 
         return [Client(i, model, client_loaders[i], malicious=(i in malicious_ids), attack_args=attack_args) for i in range(num_clients)]
-    
+
     def _load_dataset(self, dataset_name):
         if dataset_name == "MNIST":
-            transform = transforms.Compose([transforms.ToTensor()])
+            transform = transforms.Compose([ 
+                transforms.ToTensor(), 
+                transforms.Normalize((0.1307,), (0.3081,))  # Normalize with mean and std 
+            ])
             train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
             test_dataset = datasets.MNIST('./data', train=False, download=True, transform=transform)
         elif dataset_name == "EMNIST":
@@ -115,6 +120,52 @@ class Server:
     def _flatten_tensors(self, input_list):
         flattened = [torch.cat([tensor.view(-1) for tensor in tensors]) for tensors in input_list]
         return torch.stack(flattened).T
+
+    def fed_avg(self, alpha):
+        num_clients = len(self.clients)
+
+        # Initialize weights
+        global_weights = self.global_model_fedavg.state_dict()
+        client_gradients, _ = self._gather_client_updates(global_weights, 0, True, True)
+        G = client_gradients
+
+        test_acc_list = []
+        test_loss_list = []
+
+        for epoch in range(self.total_epochs):
+            print(f"FedAvg Epoch {epoch+1}/{self.total_epochs}")
+            wandb.log({"fedavg_epoch": epoch+1})
+            # Train local models and recieve gradients of clients
+            # Update global weights = global weights - alpha * W * (clients_model)
+            self._fed_avg_theta_update(G, alpha, epoch)
+            # Calc acc every epoch
+            if epoch % self.evaluate_each_epoch == 0:
+                test_acc, test_loss = self.calculate_accuracy(is_fedavg=True)
+                wandb.log({
+                    "fedavg_test_accuracy": test_acc,
+                    "fedavg_test_loss": test_loss
+                })
+
+                test_acc_list.append(test_acc)
+                test_loss_list.append(test_loss)
+
+    def _fed_avg_theta_update(self, G, alpha, epoch, params_copy=None):
+        """Performs theta updates for the global model."""
+        num_clients = len(self.clients)
+        with torch.no_grad():
+            for param_idx, (name, param) in enumerate(self.global_model_fedavg.named_parameters()):
+                # Initialize the aggregated gradient
+                agg_grad = torch.zeros_like(param.data)
+                # Aggregate gradients weighted by w
+                for client_idx in range(num_clients):
+                    grad = G[client_idx][param_idx]
+                    agg_grad += 1/num_clients * grad
+                param.data =  param.data - alpha * agg_grad if params_copy is None else params_copy[name].data - alpha * agg_grad
+
+        global_weights = self.global_model_fedavg.state_dict()
+        client_gradients, _ = self._gather_client_updates(global_weights, epoch, True, True)
+
+        G[:] = client_gradients
 
     def sparse_federated_learning(self, alpha, beta, is_ftotal=True, lambda_val=(0, 0.05, None),
                                   c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
@@ -319,15 +370,20 @@ class Server:
 
         return projected_w.tolist()
 
-    def calculate_accuracy(self):
-        def acc(dataset):
+    def calculate_accuracy(self, is_fedavg=False):
+        def acc(dataset, is_fedavg):
             correct = 0
             total_samples = 0
             total_batch = 0
             total_loss = 0
 
+            if is_fedavg:
+                model = self.global_model_fedavg
+            else:
+                model = self.global_model
+
             # Ensure model is in evaluation mode
-            self.global_model.eval()
+            model.eval()
 
             # Disable gradient calculations for evaluation
             with torch.no_grad():
@@ -336,7 +392,7 @@ class Server:
                     inputs, labels = inputs.to(device), labels.to(device)
 
                     # Get model predictions
-                    output = self.global_model(inputs)
+                    output = model(inputs)
                     loss = nn.CrossEntropyLoss()(output, labels)
                     predicted = torch.argmax(output, dim=1)
 
@@ -352,7 +408,7 @@ class Server:
             
             return accuracy, avg_loss
 
-        test_acc, test_loss = acc(self.test_dataset)
+        test_acc, test_loss = acc(self.test_dataset, is_fedavg)
 
         print("Test Accuracy = {:.2f}%, Test Loss: {:.4f}".format(test_acc, test_loss))
 
