@@ -15,13 +15,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Server:
-    def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2):
+    def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2, local_epochs=1):
         self.global_model = model.to(device)
         self.global_model_fedavg = copy.deepcopy(model).to(device)
         self.num_clients = 0
         self.test_dataset = None
-        self.clients = self._initialize_clients(dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor)
         self.total_epochs = total_epochs
+        self.local_epochs = local_epochs
+        self.clients = self._initialize_clients(dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor)
         self.evaluate_each_epoch = evaluate_each_epoch
         self.list_m_next = []
         self.list_w_next = []
@@ -40,7 +41,7 @@ class Server:
         malicious_ids = random.sample(range(num_clients), num_malicious)
         print(f"Malicious Client Indices: {malicious_ids}")
 
-        return [Client(i, model, client_loaders[i], malicious=(i in malicious_ids), attack_args=attack_args) for i in range(num_clients)]
+        return [Client(i, model, client_loaders[i], malicious=(i in malicious_ids), attack_args=attack_args, local_epoch=self.local_epochs) for i in range(num_clients)]
 
     def _load_dataset(self, dataset_name):
         if dataset_name == "MNIST":
@@ -126,8 +127,8 @@ class Server:
 
         # Initialize weights
         global_weights = self.global_model_fedavg.state_dict()
-        client_gradients, _ = self._gather_client_updates(global_weights, 0, True, True)
-        G = client_gradients
+        client_params, _ = self._gather_client_updates(global_weights, 0, lr=alpha, compute_gradient=True, return_avg_loss=True, return_params=True)
+        delta_local_weights = client_params
 
         test_acc_list = []
         test_loss_list = []
@@ -137,7 +138,7 @@ class Server:
             wandb.log({"fedavg_epoch": epoch+1})
             # Train local models and recieve gradients of clients
             # Update global weights = global weights - alpha * W * (clients_model)
-            self._fed_avg_theta_update(G, alpha, epoch)
+            self._fed_avg_theta_update(delta_local_weights, alpha, epoch)
             # Calc acc every epoch
             if epoch % self.evaluate_each_epoch == 0:
                 test_acc, test_loss = self.calculate_accuracy(is_fedavg=True)
@@ -149,23 +150,28 @@ class Server:
                 test_acc_list.append(test_acc)
                 test_loss_list.append(test_loss)
 
-    def _fed_avg_theta_update(self, G, alpha, epoch, params_copy=None):
+    def _aggeregate_params(self, delta_local_weights, eta=1):
+        """Aggregates parameters from clients to update the global model."""
+        global_weights = self.global_model_fedavg.state_dict()
+        aggregated_weights = {key: torch.zeros_like(val, dtype=torch.float32) for key, val in global_weights.items()}
+        
+        for key in aggregated_weights.keys():
+            for delta_local_weight in delta_local_weights:
+                aggregated_weights[key] += (eta * delta_local_weight[key].to(torch.float32) / len(self.clients))
+            aggregated_weights[key] += global_weights[key]
+
+        self.global_model_fedavg.load_state_dict(aggregated_weights)
+
+    def _fed_avg_theta_update(self, delta_local_weights, alpha, epoch, params_copy=None):
         """Performs theta updates for the global model."""
-        num_clients = len(self.clients)
-        with torch.no_grad():
-            for param_idx, (name, param) in enumerate(self.global_model_fedavg.named_parameters()):
-                # Initialize the aggregated gradient
-                agg_grad = torch.zeros_like(param.data)
-                # Aggregate gradients weighted by w
-                for client_idx in range(num_clients):
-                    grad = G[client_idx][param_idx]
-                    agg_grad += 1/num_clients * grad
-                param.data =  param.data - alpha * agg_grad if params_copy is None else params_copy[name].data - alpha * agg_grad
+        self._aggeregate_params(delta_local_weights)
 
         global_weights = self.global_model_fedavg.state_dict()
-        client_gradients, _ = self._gather_client_updates(global_weights, epoch, True, True)
+        client_params, _ = self._gather_client_updates(global_weights, epoch, lr=alpha, return_avg_loss=True, compute_gradient=True, return_params=True)
 
-        G[:] = client_gradients
+        # Update delta_local_weights for next iteration
+        for i, param in enumerate(client_params):
+            delta_local_weights[i] = param
 
     def sparse_federated_learning(self, alpha, beta, is_ftotal=True, lambda_val=(0, 0.05, None),
                                   c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
@@ -183,7 +189,7 @@ class Server:
         global_weights = self.global_model.state_dict()
 
         # Perform initial client updates to gather gradients and losses
-        client_gradients, client_losses = self._gather_client_updates(global_weights, 0)
+        client_gradients, client_losses = self._gather_client_updates(global_weights, 0, lr=alpha, return_avg_loss=True, compute_gradient=True)
         G, F_T = client_gradients, client_losses
         G_next = G
         F_T_next = F_T
@@ -237,12 +243,12 @@ class Server:
 
         return test_acc_list, test_loss_list
 
-    def _gather_client_updates(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
+    def _gather_client_updates(self, global_weights, epoch, lr, return_avg_loss=True, compute_gradient=True, return_params=False):
         """Gathers initial client gradients and losses."""
         client_gradients = []
         client_losses = []
         for client in self.clients:
-            grads, avg_loss = client.local_update(global_weights, epoch, return_avg_loss, compute_gradient)
+            grads, avg_loss = client.local_update(global_weights, epoch, return_avg_loss, compute_gradient, return_params=return_params, lr=lr)
             client_gradients.append(grads)
             client_losses.append(avg_loss)
         return client_gradients, client_losses
@@ -264,7 +270,7 @@ class Server:
                     agg_grad_vector.append(agg_grad)
 
             # Evaluate new loss
-            new_client_losses = self._gather_client_updates(params_new, epoch, return_avg_loss=True, compute_gradient=False)[1]
+            new_client_losses = self._gather_client_updates(params_new, epoch, lr=alpha, return_avg_loss=True, compute_gradient=False)[1]
             L_new, L_old = np.mean(new_client_losses), np.mean(F_T)
             agg_grad_tensor = torch.cat([tensor.view(-1) for tensor in agg_grad_vector])
 
@@ -289,7 +295,7 @@ class Server:
                 param.data =  param.data - alpha * agg_grad if params_copy is None else params_copy[name].data - alpha * agg_grad
 
         global_weights = self.global_model.state_dict()
-        client_gradients, client_losses = self._gather_client_updates(global_weights, epoch, True, True)
+        client_gradients, client_losses = self._gather_client_updates(global_weights, epoch, lr=alpha, compute_gradient=True, return_avg_loss=True)
 
         G_next[:] = client_gradients
         F_T_next[:] = client_losses

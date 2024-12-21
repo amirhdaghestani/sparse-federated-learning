@@ -21,10 +21,10 @@ def train(model):
 
     model_copy = copy.deepcopy(model)
     server = Server(dataset_name, num_clients, fraction_malicious, attack_args, total_epochs, q_factor, model_copy, evaluate_each_epoch)
-    # server.sparse_federated_learning(alpha, beta, is_ftotal=True, lambda_val=(0, wandb.config.lambda_max, wandb.config.lambda_end_epoch),
-    #                                  c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
-    #                                  c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
-    server.fed_avg(alpha)
+    server.sparse_federated_learning(alpha, beta, is_ftotal=True, lambda_val=(0, wandb.config.lambda_max, wandb.config.lambda_end_epoch),
+                                     c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
+                                     c_beta=1e-2, rho_beta=0.5, max_line_search_iterations_beta=0)
+    # server.fed_avg(alpha)
 
 # Sweep Configuration
 sweep_config = {
@@ -49,8 +49,10 @@ if __name__ == "__main__":
             "q_factor": 0.6,
             "evaluate_each_epoch": 1,
             "attack_args": {
-                "attack_type" : "flip_labels",
-                "attack_epoch" : 0
+                "attack_type" : "gaussian_attack",
+                "attack_epoch" : 10000000,
+                "gaussian_attack_mean" : 0,
+                "gaussian_attack_std" : 0.5
             },
             "lambda_max": 0.01,
             "lambda_end_epoch": 1

@@ -14,12 +14,13 @@ class Client:
     ATTACK_ON_PARAMETRS = ['random_parameters']
     ATTACK_ON_GRADIENT = ['boost_gradient', 'gaussian_attack', 'gaussian_additive_attack', 'lie_attack']
 
-    def __init__(self, client_id, model, data_loader, malicious=False, attack_args=None):
+    def __init__(self, client_id, model, data_loader, local_epoch=1, malicious=False, attack_args=None):
         self.client_id = client_id
         self.model = model
         self.data_loader = data_loader
         self.malicious = malicious
         self.attack_args = attack_args
+        self.local_epoch = local_epoch
 
         if malicious and attack_args is None:
             raise Exception("attack_args is not provided.")
@@ -44,42 +45,63 @@ class Client:
             elif self.attack_type == 'lie_attack':
                 self.attack_func = Attack.lie_attack
 
-    def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True):
+    def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True, return_params=False, lr=1e-3):
         local_model = copy.deepcopy(self.model.to(device))
         local_model.load_state_dict(global_weights)
         local_model.train()
 
-        total_loss = 0
-        num_batches = 0
-
-        condition = self.malicious and epoch >= self.attack_epoch
+        is_under_attack = self.malicious and epoch >= self.attack_epoch
+        optimizer = torch.optim.SGD(local_model.parameters(), lr=lr)
 
         # Attack on Parameters
-        if condition and self.attack_type in self.ATTACK_ON_PARAMETRS:
+        if is_under_attack and self.attack_type in self.ATTACK_ON_PARAMETRS:
             global_weights_random = self.attack_func(global_weights=global_weights, **self.attack_args)
             local_model.load_state_dict(global_weights_random)
 
-        for data, target in self.data_loader:
-            data, target = data.to(device), target.to(device)
+        for epoch in range(self.local_epoch):
+            total_loss = 0
+            num_batches = 0
 
-            # Attack on Gradients
-            if condition and self.attack_type in self.ATTACK_ON_DATA:
-                # If the client is malicious and the current epoch >= attack_epoch, apply attack on input data
-                data, target = self.attack_func(data=data, target=target)
+            for data, target in self.data_loader:
+                data, target = data.to(device), target.to(device)
 
-            output = local_model(data)
-            loss = nn.CrossEntropyLoss()(output, target)
-            if compute_gradient:
-                loss.backward()
+                # Attack on Data
+                if is_under_attack and self.attack_type in self.ATTACK_ON_DATA:
+                    # If the client is malicious and the current epoch >= attack_epoch, apply attack on input data
+                    data, target = self.attack_func(data=data, target=target)
 
-            total_loss += loss.item()
-            num_batches += 1
+                output = local_model(data)
+                loss = nn.CrossEntropyLoss()(output, target)
+                if compute_gradient:
+                    optimizer.zero_grad()
+                    loss.backward()
+                    ## Boost gradient Applied Here param.grad = - boost_factor * param.grad
+                    ## Gaussian Attack Applied Here param.grad = random_normal
+                    ## Gaussian Additive Noise param.grad += random_normal_additive_noise
+                    ## Lie attack param.grad += random_noraml_additive_noise(std=scale_factor * std(param.grad))
 
-        avg_loss = total_loss / num_batches if return_avg_loss else None
-        grads = [param.grad.clone() / num_batches for param in local_model.parameters()] if compute_gradient else None
+                    # Attack on Gradient
+                    grads = [param.grad.clone() for param in local_model.parameters()] if compute_gradient else None
+                    if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                        grads = self.attack_func(grads=grads, **self.attack_args)
 
-        # Attack on Gradient
-        if condition and self.attack_type in self.ATTACK_ON_GRADIENT:
-            grads = self.attack_func(grads=grads, **self.attack_args)
+                        # Apply modified gradients
+                        for param, grad in zip(local_model.parameters(), grads):
+                            param.grad = grad
 
-        return grads, avg_loss
+                    optimizer.step()
+
+                total_loss += loss.item()
+                num_batches += 1
+
+            if epoch == self.local_epoch - 1:
+                avg_loss = total_loss / num_batches if return_avg_loss else None
+
+        if return_params:
+            params = {key: local_model.state_dict()[key] - global_weights[key] for key in global_weights.keys()}
+        else:
+            params = grads
+
+        del local_model
+
+        return params, avg_loss
