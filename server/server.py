@@ -10,11 +10,14 @@ import wandb
 
 from model.model import SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
 from client.client import Client
+from attack.attack import Attack
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Server:
+    ATTACK_ON_BENIGN_UPDATES = ['lie_attack']
+
     def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2, local_epochs=1):
         self.global_model = model.to(device)
         self.global_model_fedavg = copy.deepcopy(model).to(device)
@@ -26,6 +29,15 @@ class Server:
         self.evaluate_each_epoch = evaluate_each_epoch
         self.list_m_next = []
         self.list_w_next = []
+
+        self.attack_args = attack_args
+        if attack_args is not None:
+            self.attack_type = attack_args['attack_type']
+            self.attack_epoch = attack_args['attack_epoch']
+
+            # Attack on Gradient
+            if self.attack_type == 'lie_attack':
+                self.attack_func = Attack.lie_attack
 
     def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor):
         self.num_clients = num_clients
@@ -114,7 +126,7 @@ class Server:
             for j, c in enumerate(client_per_group_idx):
                 client2data_idx[str(c)] = list_clients[j]
         
-        client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, client2data_idx[str(i)]), batch_size=64, shuffle=True) for i in range(self.num_clients)]
+        client_loaders = [torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, client2data_idx[str(i)]), batch_size=128, shuffle=True) for i in range(self.num_clients)]
 
         return client_loaders
 
@@ -251,6 +263,13 @@ class Server:
             grads, avg_loss = client.local_update(global_weights, epoch, return_avg_loss, compute_gradient, return_params=return_params, lr=lr)
             client_gradients.append(grads)
             client_losses.append(avg_loss)
+        
+        # Attack on Benign Updates
+        is_under_attack = epoch >= self.attack_epoch
+
+        if self.attack_type in self.ATTACK_ON_BENIGN_UPDATES and is_under_attack:
+            client_gradients = self.attack_func(grads=client_gradients, clients=self.clients, **self.attack_args)
+
         return client_gradients, client_losses
 
     def _line_search_alpha(self, alpha, G, F_T, w, num_clients, c, rho, epoch, max_iteration=3):

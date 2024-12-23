@@ -1,5 +1,7 @@
 """ Attack Schemes """
 import torch
+from scipy.stats import norm
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -36,7 +38,43 @@ class Attack:
         return [split.view(shape).to(device) for split, shape in zip(torch.split(grads_concat, split_size), original_shapes)]
 
     def lie_attack(*args, **kwargs):
-        return [torch.normal(mean=torch.mean(grad) + kwargs['lie_attack_factor'] * torch.std(grad), std=torch.std(grad), size=grad.shape).to(device) for grad in kwargs['grads']]
+        clients = kwargs['clients']
+        clients_grads = kwargs['grads']
+        num_clients = len(clients)
+
+        malicious_gradients = [
+            clients_grads[i]
+            for i, client in enumerate(clients) if client.malicious
+        ]
+
+        s = num_clients // 2 + 1 - len(malicious_gradients)
+        phi_value = (num_clients - s) / num_clients
+        z = norm.ppf(phi_value)
+
+        # Initialize dictionary to store crafted malicious gradient
+        attacked_grad = {}
+
+        if isinstance(clients_grads[0], dict):
+            for_list = clients_grad[0].keys()
+        else:
+            for_list = range(len(clients_grads[0]))
+
+        # Stack tensors for each key in the gradient dictionaries
+        for key in for_list:
+            # Extract tensors for the current key from all malicious gradients
+            stacked_tensors = torch.stack([grad[key].float() for grad in malicious_gradients])
+            mean_tensor = torch.mean(stacked_tensors, dim=0)
+            std_tensor = torch.std(stacked_tensors, dim=0)
+
+            # Craft the malicious gradient for the current key
+            attacked_grad[key] = mean_tensor - z * std_tensor
+
+        # Replace gradients for malicious clients
+        for i, client in enumerate(clients):
+            if client.malicious:
+                clients_grads[i] = attacked_grad
+
+        return clients_grads
 
     def __call__(attack_func, *args, **kwargs):
         return attack_func(*args, **kwargs)

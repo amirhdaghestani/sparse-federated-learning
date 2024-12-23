@@ -12,7 +12,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Client:
     ATTACK_ON_DATA = ['flip_labels']
     ATTACK_ON_PARAMETRS = ['random_parameters']
-    ATTACK_ON_GRADIENT = ['boost_gradient', 'gaussian_attack', 'gaussian_additive_attack', 'lie_attack']
+    ATTACK_ON_GRADIENT = ['boost_gradient', 'gaussian_attack', 'gaussian_additive_attack']
 
     def __init__(self, client_id, model, data_loader, local_epoch=1, malicious=False, attack_args=None):
         self.client_id = client_id
@@ -58,9 +58,11 @@ class Client:
             global_weights_random = self.attack_func(global_weights=global_weights, **self.attack_args)
             local_model.load_state_dict(global_weights_random)
 
+        total_grads = None
         for epoch in range(self.local_epoch):
             total_loss = 0
             num_batches = 0
+            grad_trajectory = []
 
             for data, target in self.data_loader:
                 data, target = data.to(device), target.to(device)
@@ -89,7 +91,17 @@ class Client:
                         for param, grad in zip(local_model.parameters(), grads):
                             param.grad = grad
 
-                    optimizer.step()
+                    # Initialize total_grads if it's the first batch
+                    if total_grads is None:
+                        total_grads = [torch.zeros_like(grad) for grad in grads]
+
+                    for i, grad in enumerate(grads):
+                        total_grads[i] += grad
+
+                    # optimizer.step()
+                    for i, param in enumerate(local_model.parameters()):
+                        param.data =  param.data - lr * grads[i]
+
 
                 total_loss += loss.item()
                 num_batches += 1
@@ -97,6 +109,8 @@ class Client:
             if epoch == self.local_epoch - 1:
                 avg_loss = total_loss / num_batches if return_avg_loss else None
 
+        grads = total_grads
+        
         if return_params:
             params = {key: local_model.state_dict()[key] - global_weights[key] for key in global_weights.keys()}
         else:
