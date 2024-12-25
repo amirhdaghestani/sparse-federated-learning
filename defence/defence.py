@@ -92,7 +92,7 @@ class Defence:
         # Step 1: Perform iterative Krum selection to create a candidate set
         candidate_set = []
         for _ in range(n - 2 * m):
-            candidate, krum_index = self.krum(delta_local_updates=delta_local_updates, return_index=True)
+            candidate, krum_index = self.krum(return_index=True, **kwargs)
             candidate_set.append(candidate)
             del delta_local_updates[krum_index]
 
