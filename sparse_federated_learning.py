@@ -63,11 +63,11 @@ def train(model):
 # Sweep Configuration
 sweep_config = {
     'method': 'bayes',  # Choose 'grid', 'random', or 'bayes'
-    'metric': {'name': 'Test Accuracy', 'goal': 'maximize'},
+    'metric': {'name': 'test_accuracy', 'goal': 'maximize'},
     'parameters': {
-        'alpha': {'values': [0.01, 0.001, 0.0001, 0.004]},
-        'beta': {'values': [5e-5, 1e-5, 5e-6]},
-        'lambda_max': {'values': [0.0025, 0.001, 0.0005]}
+        'alpha': {'values': [0.025, 0.01, 0.006, 0.0015]},
+        'beta': {'values': [1e-4, 5e-5, 2e-5]},
+        'lambda_max': {'values': [0.0025, 0.004, 0.001]}
     }
 }
 
@@ -76,18 +76,19 @@ if __name__ == "__main__":
         wandb.init(
             project="test",
             config={
-                "aggregate_type": "fedavg", # sparse or fedavg
+                "aggregate_type": "sparse", # sparse or fedavg
                 "dataset_name": "MNIST",
-                "num_clients": 50,
+                "num_clients": 200,
                 "fraction_malicious": 0.25,
-                "total_epochs": 50,
+                "total_epochs": 200,
                 "alpha": 0.01,
                 "beta": 1e-4,
                 "q_factor": 0.6,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "flip_labels",
-                    "attack_epoch" : 0,
+                    "attack_type" : "lie_attack",
+                    "attack_epoch" : 20,
+                    "z" : 2.1
                 },
                 "defence_args": {
                     "defence_type" : "krum",

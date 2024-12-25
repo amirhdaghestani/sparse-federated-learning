@@ -74,9 +74,11 @@ class Attack:
         if isinstance(clients_grads[0], dict):
             for_list = clients_grads[0].keys()
             attacked_grad = {}
+            sign_z = -1
         else:
             for_list = range(len(clients_grads[0]))
             attacked_grad = [[]] * len(clients_grads[0])
+            sign_z = 1
 
         # Stack tensors for each key in the gradient dictionaries
         for key in for_list:
@@ -86,7 +88,7 @@ class Attack:
             std_tensor = torch.std(stacked_tensors, dim=0)
 
             # Craft the malicious gradient for the current key
-            attacked_grad[key] = mean_tensor - z * std_tensor
+            attacked_grad[key] = mean_tensor + sign_z * z * std_tensor
 
         # Replace gradients for malicious clients
         for i, client in enumerate(clients):

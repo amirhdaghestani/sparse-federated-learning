@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import copy
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 class Defence:
 
@@ -40,25 +42,22 @@ class Defence:
         return_index = kwargs.get("return_index")
 
         num_updates = len(delta_local_updates)
-        distances = np.zeros((num_updates, num_updates))  # Pairwise distances between updates
 
-        # Compute pairwise distances between updates
-        for i in range(num_updates):
-            for j in range(num_updates):
-                if i != j:
-                    distances[i, j] = sum(
-                        torch.norm(delta_local_updates[i][key] - delta_local_updates[j][key]) ** 2
-                        for key in delta_local_updates[i].keys()
-                    )
+        # Compute pairwise distances between updates efficiently on GPU
+        keys = list(delta_local_updates[0].keys())
+        updates_flat = torch.stack([
+            torch.cat([delta_local_updates[i][key].flatten() for key in keys]).to(device)  # Ensure tensors are on GPU
+            for i in range(num_updates)
+        ])
+
+        distances = torch.cdist(updates_flat, updates_flat, p=2) ** 2  # Compute pairwise distances on GPU
 
         # Compute scores for each update
-        scores = []
-        for i in range(num_updates):
-            sorted_distances = sorted(distances[i])
-            scores.append(sum(sorted_distances[:non_malicious_count]))
+        sorted_distances, _ = distances.sort(dim=1)
+        scores = sorted_distances[:, 1:1 + non_malicious_count].sum(dim=1)  # Exclude self-distance and sum top-k distances
 
         # Select the update with the minimum score
-        krum_index = np.argmin(scores)
+        krum_index = scores.argmin().item()
 
         if return_index:
             return delta_local_updates[krum_index], krum_index
