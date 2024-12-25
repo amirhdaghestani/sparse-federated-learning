@@ -3,29 +3,62 @@ import copy
 
 from model.model import SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
 from server.server import Server
+from server.server_sparse import SparseFLServer
+from server.server_fedavg import FedAvgServer
+
 
 MODEL = ThreeLayerFC()
 
 
 def train(model):
     # Hyperparameters will be taken from wandb.config
-    dataset_name = wandb.config.dataset_name
-    num_clients = wandb.config.num_clients
-    fraction_malicious = wandb.config.fraction_malicious
-    total_epochs = wandb.config.total_epochs
-    alpha = wandb.config.alpha
-    beta = wandb.config.beta
-    q_factor = wandb.config.q_factor
-    evaluate_each_epoch = wandb.config.evaluate_each_epoch
-    attack_args = wandb.config.attack_args
-    defence_args = wandb.config.defence_args
+    config = wandb.config
+    dataset_name = config.get("dataset_name", "MNIST")
+    num_clients = config.get("num_clients", 10)
+    fraction_malicious = config.get("fraction_malicious", 0.0)
+    total_epochs = config.get("total_epochs", 10)
+    q_factor = config.get("q_factor", 0.1)
+    evaluate_each_epoch = config.get("evaluate_each_epoch", 1)
+    attack_args = config.get("attack_args", {})
+    defence_args = config.get("defence_args", {})
+    aggregate_type = config.get("aggregate_type", "fedavg")
 
-    model_copy = copy.deepcopy(model)
-    server = Server(dataset_name, num_clients, fraction_malicious, attack_args, defence_args, total_epochs, q_factor, model_copy, evaluate_each_epoch)
-    # server.sparse_federated_learning(alpha, beta, is_ftotal=True, lambda_val=(0, wandb.config.lambda_max, wandb.config.lambda_end_epoch),
-    #                                 c_alpha=1e-3, rho_alpha=0.5, max_line_search_iterations_alpha=0,
-    #                                 c_beta=1e-3, rho_beta=0.5, max_line_search_iterations_beta=100)
-    server.fed_avg(alpha)
+    # Common arguments for both servers
+    server_args = {
+        "dataset_name": dataset_name,
+        "num_clients": num_clients,
+        "fraction_malicious": fraction_malicious,
+        "attack_args": attack_args,
+        "defence_args": defence_args,
+        "total_epochs": total_epochs,
+        "q_factor": q_factor,
+        "model": model,
+        "evaluate_each_epoch": evaluate_each_epoch,
+    }
+
+    if aggregate_type == "sparse":
+        sparse_params = {
+            "alpha": config.get("alpha", 1e-3),
+            "beta": config.get("beta", 1e-4),
+            "is_ftotal": True,
+            "lambda_val": (0, config.get("lambda_max", 0.0025), config.get("lambda_end_epoch", 100)),
+            "c_alpha": 1e-3,
+            "rho_alpha": 0.5,
+            "max_line_search_iterations_alpha": 0,
+            "c_beta": 1e-3,
+            "rho_beta": 0.5,
+            "max_line_search_iterations_beta": 100,
+        }
+        server = SparseFLServer(**server_args)
+        server.run(**sparse_params)
+    elif aggregate_type == "fedavg":
+        fedavg_params = {
+            "alpha": config.get("alpha", 1e-3),
+        }
+        server = FedAvgServer(**server_args)
+        server.run(**fedavg_params)
+    else:
+        raise ValueError(f"Unknown aggregate_type: {aggregate_type}")
 
 # Sweep Configuration
 sweep_config = {
@@ -40,27 +73,30 @@ sweep_config = {
 
 if __name__ == "__main__":
     def train_wrapper():
-        wandb.init(project="test", config={
-            "dataset_name": "MNIST",
-            "num_clients": 50,
-            "fraction_malicious": 0.25,
-            "total_epochs": 50,
-            "alpha": 0.0081,
-            "beta": 1e-4,
-            "q_factor": 0.6,
-            "evaluate_each_epoch": 1,
-            "attack_args": {
-                "attack_type" : "boost_gradient",
-                "attack_epoch" : 0,
-                "boost_factor" : -2.5
-            },
-            "defence_args": {
-                "defence_type" : "trimmed_mean",
-            },
-            "lambda_max": 0.0025,
-            "lambda_end_epoch": 100
-        })
-
+        wandb.init(
+            project="test",
+            config={
+                "aggregate_type": "fedavg", # sparse or fedavg
+                "dataset_name": "MNIST",
+                "num_clients": 50,
+                "fraction_malicious": 0.25,
+                "total_epochs": 50,
+                "alpha": 0.01,
+                "beta": 1e-4,
+                "q_factor": 0.6,
+                "evaluate_each_epoch": 1,
+                "attack_args": {
+                    "attack_type" : "flip_labels",
+                    "attack_epoch" : 0,
+                },
+                "defence_args": {
+                    "defence_type" : "krum",
+                    "krum_factor" : int((1 - 0.25) * 50)
+                },
+                "lambda_max": 0.0025,
+                "lambda_end_epoch": 100
+            }
+        )
         train(MODEL)
 
     train_wrapper()

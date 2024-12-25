@@ -7,9 +7,9 @@ import copy
 class Defence:
 
     def __init__(self, defence_args=None):
-        defence_type = defence_args['defence_type']
-        self.defense_args = defence_args
-        if defence_type is None or defence_type == "no_defense":
+        defence_type = defence_args.get('defence_type', 'no_defense')
+
+        if defence_type == "no_defense":
             self.func = self.no_defense
         elif defence_type == "krum":
             self.func = self.krum
@@ -17,7 +17,8 @@ class Defence:
             self.func = self.trimmed_mean
         elif defence_type == "bulyan":
             self.func = self.bulyan
-        
+        else:
+            self.func = self.no_defense
 
     def no_defense(self, *args, **kwargs):
         delta_local_updates = kwargs["delta_local_updates"]
@@ -35,11 +36,9 @@ class Defence:
 
     def krum(self, *args, **kwargs):
         delta_local_updates = kwargs['delta_local_updates']
-        non_malicious_count = self.defense_args.get('krum_factor')
+        non_malicious_count = kwargs.get('krum_factor', len(delta_local_updates) - 2)
         return_index = kwargs.get("return_index")
 
-        if non_malicious_count is None:
-            non_malicious_count = len(delta_local_updates) - 2
         num_updates = len(delta_local_updates)
         distances = np.zeros((num_updates, num_updates))  # Pairwise distances between updates
 
@@ -69,10 +68,7 @@ class Defence:
 
     def trimmed_mean(self, *args, **kwargs):
         delta_local_updates = kwargs['delta_local_updates']
-        beta = self.defense_args.get('trimmed_factor')
-
-        if beta is None:
-            beta = 0.1
+        beta = kwargs.get('trimmed_factor', 0.1)
 
         num_clients = len(delta_local_updates)
         trimmed_weights = {key: [] for key in delta_local_updates[0].keys()}
@@ -91,10 +87,7 @@ class Defence:
 
     def bulyan(self, *args, **kwargs):
         delta_local_updates = copy.deepcopy(kwargs['delta_local_updates'])
-        m = self.defense_args.get('bulyan_factor')
-
-        if m is None:
-            m = len(delta_local_updates) // 4  # Default assumption for number of malicious updates
+        m = kwargs.get('bulyan_factor', len(delta_local_updates) // 4)
         n = len(delta_local_updates)
 
         # Step 1: Perform iterative Krum selection to create a candidate set
@@ -113,9 +106,8 @@ class Defence:
 
             aggregated_weights[key] = torch.stack(aggregated_weights[key])
             sorted_weights, _ = torch.sort(aggregated_weights[key], dim=0)
-            # Adjust bounds for trimming
             lower_bound = max(0, min(m, len(candidate_set) // 2))  # Ensure valid lower bound
-            upper_bound = max(lower_bound + 1, min(len(candidate_set), len(candidate_set) - m))  # Ensure valid range
+            upper_bound = max(lower_bound + 1, len(candidate_set) - m)  # Ensure valid range
 
             aggregated_weights[key] = sorted_weights[lower_bound:upper_bound].mean(dim=0)
 

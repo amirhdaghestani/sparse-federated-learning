@@ -19,31 +19,16 @@ class Client:
         self.model = model
         self.data_loader = data_loader
         self.malicious = malicious
-        self.attack_args = attack_args
         self.local_epoch = local_epoch
 
         if malicious and attack_args is None:
             raise Exception("attack_args is not provided.")
 
         if attack_args is not None:
+            self.attack_args = attack_args
             self.attack_type = attack_args['attack_type']
             self.attack_epoch = attack_args['attack_epoch']
-
-            # Attack on Data
-            if self.attack_type == 'flip_labels':
-                self.attack_func = Attack.flip_labels
-            # Attack on Parameters
-            elif self.attack_type == 'random_parameters':
-                self.attack_func = Attack.random_parameters
-            # Attack on Gradient
-            elif self.attack_type == 'boost_gradient':
-                self.attack_func = Attack.boost_gradient
-            elif self.attack_type == 'gaussian_attack':
-                self.attack_func = Attack.gaussian_attack
-            elif self.attack_type == 'gaussian_additive_attack':
-                self.attack_func = Attack.gaussian_additive_attack
-            elif self.attack_type == 'lie_attack':
-                self.attack_func = Attack.lie_attack
+            self.attack_func = Attack(attack_args)
 
     def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True, return_params=False, lr=1e-3):
         local_model = copy.deepcopy(self.model.to(device))

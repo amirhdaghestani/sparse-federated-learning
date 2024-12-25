@@ -26,21 +26,20 @@ class Server:
         self.test_dataset = None
         self.total_epochs = total_epochs
         self.local_epochs = local_epochs
-        self.clients = self._initialize_clients(dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor)
+        self.clients = self._initialize_clients(dataset_name=dataset_name, num_clients=num_clients, model=model, fraction_malicious=fraction_malicious, attack_args=attack_args, q_factor=q_factor)
         self.evaluate_each_epoch = evaluate_each_epoch
         self.list_m_next = []
         self.list_w_next = []
 
-        self.defence = Defence(defence_args=defence_args)
+        self.defence_args = defence_args
+        if defence_args is not None:
+            self.defence_func = Defence(defence_args=defence_args)
 
         self.attack_args = attack_args
         if attack_args is not None:
-            self.attack_type = attack_args['attack_type']
-            self.attack_epoch = attack_args['attack_epoch']
-
-            # Attack on Gradient
-            if self.attack_type == 'lie_attack':
-                self.attack_func = Attack.lie_attack
+            self.attack_type = attack_args.get('attack_type', None)
+            self.attack_epoch = attack_args.get('attack_epoch', -1)
+            self.attack_func = Attack(attack_args=attack_args)
 
     def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor):
         self.num_clients = num_clients
@@ -136,13 +135,32 @@ class Server:
     def _flatten_tensors(self, input_list):
         flattened = [torch.cat([tensor.view(-1) for tensor in tensors]) for tensors in input_list]
         return torch.stack(flattened).T
+    
+    def _gather_client_updates(self, global_weights, epoch, lr, return_avg_loss=True, compute_gradient=True, return_params=False):
+        """Gathers initial client gradients and losses."""
+        client_gradients = []
+        client_losses = []
+        for client in self.clients:
+            grads, avg_loss = client.local_update(global_weights=global_weights, epoch=epoch, return_avg_loss=return_avg_loss,
+                                                  compute_gradient=compute_gradient, return_params=return_params, lr=lr)
+            client_gradients.append(grads)
+            client_losses.append(avg_loss)
+        
+        # Attack on Benign Updates
+        is_under_attack =  epoch >= self.attack_epoch
+
+        if self.attack_type in self.ATTACK_ON_BENIGN_UPDATES and is_under_attack:
+            client_gradients = self.attack_func(grads=client_gradients, clients=self.clients, **self.attack_args)
+
+        return client_gradients, client_losses
 
     def fed_avg(self, alpha):
         num_clients = len(self.clients)
 
         # Initialize weights
         global_weights = self.global_model_fedavg.state_dict()
-        client_params, _ = self._gather_client_updates(global_weights, 0, lr=alpha, compute_gradient=True, return_avg_loss=True, return_params=True)
+        client_params, _ = self._gather_client_updates(global_weights=global_weights, epoch=0, lr=alpha,
+                                                       compute_gradient=True, return_avg_loss=True, return_params=True)
         delta_local_weights = client_params
 
         test_acc_list = []
@@ -167,7 +185,7 @@ class Server:
 
     def _aggeregate_params(self, delta_local_weights, eta=1):
         """Aggregates parameters from clients to update the global model."""
-        aggregated_weights = self.defence(delta_local_updates=delta_local_weights)
+        aggregated_weights = self.defence_func(delta_local_updates=delta_local_weights, **self.defence_args)
         global_weights = self.global_model_fedavg.state_dict()
 
         for key in aggregated_weights.keys():
@@ -182,9 +200,7 @@ class Server:
         global_weights = self.global_model_fedavg.state_dict()
         client_params, _ = self._gather_client_updates(global_weights, epoch, lr=alpha, return_avg_loss=True, compute_gradient=True, return_params=True)
 
-        # Update delta_local_weights for next iteration
-        for i, param in enumerate(client_params):
-            delta_local_weights[i] = param
+        delta_local_weights = client_params
 
     def sparse_federated_learning(self, alpha, beta, is_ftotal=True, lambda_val=(0, 0.05, None),
                                   c_alpha=1e-4, rho_alpha=0.5, max_line_search_iterations_alpha=0,
@@ -255,23 +271,6 @@ class Server:
                 test_loss_list.append(test_loss)
 
         return test_acc_list, test_loss_list
-
-    def _gather_client_updates(self, global_weights, epoch, lr, return_avg_loss=True, compute_gradient=True, return_params=False):
-        """Gathers initial client gradients and losses."""
-        client_gradients = []
-        client_losses = []
-        for client in self.clients:
-            grads, avg_loss = client.local_update(global_weights, epoch, return_avg_loss, compute_gradient, return_params=return_params, lr=lr)
-            client_gradients.append(grads)
-            client_losses.append(avg_loss)
-        
-        # Attack on Benign Updates
-        is_under_attack = epoch >= self.attack_epoch
-
-        if self.attack_type in self.ATTACK_ON_BENIGN_UPDATES and is_under_attack:
-            client_gradients = self.attack_func(grads=client_gradients, clients=self.clients, **self.attack_args)
-
-        return client_gradients, client_losses
 
     def _line_search_alpha(self, alpha, G, F_T, w, num_clients, c, rho, epoch, max_iteration=3):
         """Performs line search for alpha using Armijo condition."""

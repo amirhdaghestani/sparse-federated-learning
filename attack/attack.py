@@ -7,7 +7,24 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Attack:
-    # Function to flip labels for malicious clients
+    def __init__(self, attack_args):
+        attack_type = attack_args['attack_type']
+
+        # Attack on Data
+        if attack_type == 'flip_labels':
+            self.func = self.flip_labels
+        # Attack on Parameters
+        elif attack_type == 'random_parameters':
+            self.func = self.random_parameters
+        # Attack on Gradient
+        elif attack_type == 'boost_gradient':
+            self.func = self.boost_gradient
+        elif attack_type == 'gaussian_attack':
+            self.func = self.gaussian_attack
+        elif attack_type == 'gaussian_additive_attack':
+            self.func = self.gaussian_additive_attack
+        elif attack_type == 'lie_attack':
+            self.func = self.lie_attack
 
     # Attack on Data
     def flip_labels(*args, **kwargs):
@@ -15,7 +32,7 @@ class Attack:
 
     # Attack on Parameters
     def random_parameters(*args, **kwargs):
-        return {name: torch.normal(mean=kwargs['random_parameters_mean'], std=kwargs['random_parameters_std'], size=param.shape).to(device)for name, param in kwargs['global_weights'].items()}
+        return {name: torch.normal(mean=kwargs['random_parameters_mean'], std=kwargs['random_parameters_std'], size=param.shape).to(device) for name, param in kwargs['global_weights'].items()}
 
     # Attack on Gradient
     def boost_gradient(*args, **kwargs):
@@ -49,15 +66,17 @@ class Attack:
 
         s = num_clients // 2 + 1 - len(malicious_gradients)
         phi_value = (num_clients - s) / num_clients
-        z = norm.ppf(phi_value)
+        z_default = norm.ppf(phi_value)
+
+        z = kwargs.get("z", z_default)
 
         # Initialize dictionary to store crafted malicious gradient
-        attacked_grad = {}
-
         if isinstance(clients_grads[0], dict):
-            for_list = clients_grad[0].keys()
+            for_list = clients_grads[0].keys()
+            attacked_grad = {}
         else:
             for_list = range(len(clients_grads[0]))
+            attacked_grad = [[]] * len(clients_grads[0])
 
         # Stack tensors for each key in the gradient dictionaries
         for key in for_list:
@@ -76,5 +95,5 @@ class Attack:
 
         return clients_grads
 
-    def __call__(attack_func, *args, **kwargs):
-        return attack_func(*args, **kwargs)
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
