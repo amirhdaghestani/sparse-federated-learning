@@ -11,6 +11,7 @@ import wandb
 from model.model import SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
 from client.client import Client
 from attack.attack import Attack
+from defence.defence import Defence
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -18,7 +19,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class Server:
     ATTACK_ON_BENIGN_UPDATES = ['lie_attack']
 
-    def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2, local_epochs=1):
+    def __init__(self, dataset_name, num_clients, fraction_malicious, attack_args=None, defence_args=None, total_epochs=5, q_factor=0.1, model=SimpleCNNWithBatchNorm(), evaluate_each_epoch=2, local_epochs=1):
         self.global_model = model.to(device)
         self.global_model_fedavg = copy.deepcopy(model).to(device)
         self.num_clients = 0
@@ -29,6 +30,8 @@ class Server:
         self.evaluate_each_epoch = evaluate_each_epoch
         self.list_m_next = []
         self.list_w_next = []
+
+        self.defence = Defence(defence_args=defence_args)
 
         self.attack_args = attack_args
         if attack_args is not None:
@@ -164,13 +167,11 @@ class Server:
 
     def _aggeregate_params(self, delta_local_weights, eta=1):
         """Aggregates parameters from clients to update the global model."""
+        aggregated_weights = self.defence(delta_local_updates=delta_local_weights)
         global_weights = self.global_model_fedavg.state_dict()
-        aggregated_weights = {key: torch.zeros_like(val, dtype=torch.float32) for key, val in global_weights.items()}
-        
+
         for key in aggregated_weights.keys():
-            for delta_local_weight in delta_local_weights:
-                aggregated_weights[key] += (eta * delta_local_weight[key].to(torch.float32) / len(self.clients))
-            aggregated_weights[key] += global_weights[key]
+            aggregated_weights[key] = global_weights[key] + eta * aggregated_weights[key]
 
         self.global_model_fedavg.load_state_dict(aggregated_weights)
 
