@@ -286,8 +286,9 @@ class BaseServer:
             self.attack_func is not None
         ):
             # Malicious manipulation of benign updates
-            client_gradients = self.attack_func(
+            client_gradients, client_losses = self.attack_func(
                 grads=client_gradients,
+                losses=client_losses,
                 clients=self.clients,
                 **(self.attack_args if self.attack_args else {})
             )

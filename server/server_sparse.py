@@ -187,7 +187,7 @@ class SparseFLServer(BaseServer):
                 if params_copy is None:
                     param -= alpha * agg_grad
                 else:
-                    param.data = params_copy[name] - alpha * agg_grad
+                    param.data = params_copy[name].data - alpha * agg_grad
 
         updated_weights = self.global_model.state_dict()
         # Now gather new client updates from the updated model

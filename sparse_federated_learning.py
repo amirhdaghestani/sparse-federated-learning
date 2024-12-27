@@ -1,5 +1,6 @@
 import wandb
 import copy
+import torch
 
 from model.model import SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
 from server.server import Server
@@ -7,7 +8,8 @@ from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
 
-MODEL = ThreeLayerFC()
+MODEL = torch.load("./models/three_layer_fc.pt")
+MODEL = SimpleCNNWithBatchNorm()
 
 
 def train(model):
@@ -76,22 +78,22 @@ if __name__ == "__main__":
         wandb.init(
             project="test",
             config={
-                "aggregate_type": "sparse", # sparse or fedavg
+                "aggregate_type": "fedavg", # sparse or fedavg
                 "dataset_name": "MNIST",
                 "num_clients": 200,
                 "fraction_malicious": 0.25,
                 "total_epochs": 200,
                 "alpha": 0.01,
                 "beta": 1e-4,
-                "q_factor": 0.6,
+                "q_factor": 1,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
                     "attack_type" : "lie_attack",
-                    "attack_epoch" : 20,
+                    "attack_epoch" : 0,
                     "z" : 2.1
                 },
                 "defence_args": {
-                    "defence_type" : "krum",
+                    "defence_type" : "no_defence",
                     "krum_factor" : int((1 - 0.25) * 50)
                 },
                 "lambda_max": 0.0025,

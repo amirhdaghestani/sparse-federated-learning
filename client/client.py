@@ -83,10 +83,11 @@ class Client:
                     for i, grad in enumerate(grads):
                         total_grads[i] += grad
 
-                    # optimizer.step()
-                    for i, param in enumerate(local_model.parameters()):
-                        param.data =  param.data - lr * grads[i]
+                    optimizer.step()
 
+                    if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                        output = local_model(data)
+                        loss = nn.CrossEntropyLoss()(output, target)
 
                 total_loss += loss.item()
                 num_batches += 1
