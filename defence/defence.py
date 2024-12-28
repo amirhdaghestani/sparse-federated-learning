@@ -92,6 +92,7 @@ class Defence:
         # Step 1: Perform iterative Krum selection to create a candidate set
         candidate_set = []
         for _ in range(n - 2 * m):
+            kwargs['delta_local_updates'] = delta_local_updates
             candidate, krum_index = self.krum(return_index=True, **kwargs)
             candidate_set.append(candidate)
             del delta_local_updates[krum_index]
@@ -108,7 +109,7 @@ class Defence:
             lower_bound = max(0, min(m, len(candidate_set) // 2))  # Ensure valid lower bound
             upper_bound = max(lower_bound + 1, len(candidate_set) - m)  # Ensure valid range
 
-            aggregated_weights[key] = sorted_weights[lower_bound:upper_bound].mean(dim=0)
+            aggregated_weights[key] = sorted_weights[lower_bound:upper_bound].float().mean(dim=0)
 
         return aggregated_weights
 

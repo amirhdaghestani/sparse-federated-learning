@@ -8,7 +8,7 @@ from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
 
-MODEL = torch.load("./models/three_layer_fc.pt")
+# MODEL = torch.load("./models/three_layer_fc.pt")
 MODEL = SimpleCNNWithBatchNorm()
 
 
@@ -24,6 +24,7 @@ def train(model):
     attack_args = config.get("attack_args", {})
     defence_args = config.get("defence_args", {})
     aggregate_type = config.get("aggregate_type", "fedavg")
+    batch_size = config.get("batch_size", 64)
 
     # Common arguments for both servers
     server_args = {
@@ -36,6 +37,7 @@ def train(model):
         "q_factor": q_factor,
         "model": model,
         "evaluate_each_epoch": evaluate_each_epoch,
+        "batch_size": batch_size
     }
 
     if aggregate_type == "sparse":
@@ -62,14 +64,23 @@ def train(model):
     else:
         raise ValueError(f"Unknown aggregate_type: {aggregate_type}")
 
-# Sweep Configuration
-sweep_config = {
+# Sweep Configuration Sparse
+sweep_config_sparse = {
     'method': 'bayes',  # Choose 'grid', 'random', or 'bayes'
     'metric': {'name': 'test_accuracy', 'goal': 'maximize'},
     'parameters': {
         'alpha': {'values': [0.025, 0.01, 0.006, 0.0015]},
         'beta': {'values': [1e-4, 5e-5, 2e-5]},
         'lambda_max': {'values': [0.0025, 0.004, 0.001]}
+    }
+}
+
+# Sweep Configuration FedAvg
+sweep_config_fedavg = {
+    'method': 'bayes',  # Choose 'grid', 'random', or 'bayes'
+    'metric': {'name': 'test_accuracy', 'goal': 'maximize'},
+    'parameters': {
+        'alpha': {'values': [0.025, 0.01, 0.006, 0.0015]},
     }
 }
 
@@ -85,25 +96,27 @@ if __name__ == "__main__":
                 "total_epochs": 200,
                 "alpha": 0.01,
                 "beta": 1e-4,
-                "q_factor": 1,
+                "q_factor": 0.6,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "lie_attack",
-                    "attack_epoch" : 0,
-                    "z" : 2.1
+                    "attack_type" : "boost_gradient",
+                    "attack_epoch" : 20,
+                    "boost_factor" : -2.5
                 },
                 "defence_args": {
-                    "defence_type" : "no_defence",
-                    "krum_factor" : int((1 - 0.25) * 50)
+                    "defence_type" : "bulyan",
+                    "bulyan_factor" : 25,
+                    "krum_factor" : int((1 - 0.25) * 200)
                 },
                 "lambda_max": 0.0025,
-                "lambda_end_epoch": 100
+                "lambda_end_epoch": 100,
+                "batch_size": 64
             }
         )
         train(MODEL)
 
     train_wrapper()
 
-    # sweep_id = wandb.sweep(sweep_config, project="federated_learning_sweep_fixed")
+    # sweep_id = wandb.sweep(sweep_config_fedavg, project="federated_learning_sweep_fixed")
     # wandb.agent(sweep_id, function=train_wrapper)
 

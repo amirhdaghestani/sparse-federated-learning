@@ -38,7 +38,8 @@ class BaseServer:
         q_factor=0.1,
         model=SimpleCNNWithBatchNorm(),
         evaluate_each_epoch=2,
-        local_epochs=1
+        local_epochs=1,
+        batch_size=64
     ):
         """
         Parameters
@@ -94,14 +95,15 @@ class BaseServer:
             model=model,
             fraction_malicious=fraction_malicious,
             attack_args=attack_args,
-            q_factor=q_factor
+            q_factor=q_factor,
+            batch_size=batch_size
         )
 
         # For Sparse FL line-search
         self.list_m_next = []
         self.list_w_next = []
 
-    def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor):
+    def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor, batch_size):
         """
         Loads data, creates client data loaders, and marks some clients as malicious.
         """
@@ -110,7 +112,7 @@ class BaseServer:
 
         # Number of classes = max label + 1
         num_label = max(self.train_dataset.targets.tolist()) + 1
-        client_loaders = self._distribute_dataset(self.train_dataset, num_label, q_factor)
+        client_loaders = self._distribute_dataset(self.train_dataset, num_label=num_label, q_factor=q_factor, batch_size=batch_size)
 
         num_malicious = int(fraction_malicious * num_clients)
         malicious_ids = random.sample(range(num_clients), num_malicious)
@@ -167,7 +169,7 @@ class BaseServer:
         k, m = divmod(len(arr), n)
         return (arr[i*k + min(i, m):(i+1)*k + min(i+1, m)] for i in range(n))
 
-    def _distribute_dataset(self, train_dataset, num_label, q_factor):
+    def _distribute_dataset(self, train_dataset, num_label, q_factor, batch_size):
         """
         Distributes the dataset among clients in a partially overlapping manner 
         controlled by q_factor. 
@@ -229,7 +231,7 @@ class BaseServer:
         for i in range(self.num_clients):
             subset_indices = client2data_idx[i]
             subset_ds = torch.utils.data.Subset(train_dataset, subset_indices)
-            loader = torch.utils.data.DataLoader(subset_ds, batch_size=128, shuffle=True)
+            loader = torch.utils.data.DataLoader(subset_ds, batch_size=batch_size, shuffle=True)
             client_loaders.append(loader)
 
         return client_loaders
