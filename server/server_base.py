@@ -157,6 +157,21 @@ class BaseServer:
                 './data', train=False, split=split, 
                 download=True, transform=transform
             )
+        elif dataset_name == "CIFAR10": 
+            # Common transformations for CIFAR-10 
+            transform = transforms.Compose([ 
+                # Data augmentation (optional) 
+                transforms.ToTensor(), 
+                transforms.Normalize((0.4914, 0.4822, 0.4465), 
+                                    (0.2470, 0.2435, 0.2616)) 
+            ])
+            train_dataset = datasets.CIFAR10('./data', train=True, download=True, transform=transform) 
+            test_dataset = datasets.CIFAR10('./data', train=False, download=True, transform=transform)
+
+            # Convert targets (labels) to a tensor
+            train_dataset.targets = torch.tensor(train_dataset.targets)
+            test_dataset.targets = torch.tensor(test_dataset.targets)
+
         else:
             raise ValueError(f"Unknown dataset name: {dataset_name}")
 

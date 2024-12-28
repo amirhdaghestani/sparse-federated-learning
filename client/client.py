@@ -10,7 +10,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Client:
-    ATTACK_ON_DATA = ['flip_labels']
+    ATTACK_ON_DATA = ['flip_labels', 'backdoor']
     ATTACK_ON_PARAMETRS = ['random_parameters']
     ATTACK_ON_GRADIENT = ['boost_gradient', 'gaussian_attack', 'gaussian_additive_attack']
 
@@ -55,7 +55,7 @@ class Client:
                 # Attack on Data
                 if is_under_attack and self.attack_type in self.ATTACK_ON_DATA:
                     # If the client is malicious and the current epoch >= attack_epoch, apply attack on input data
-                    data, target = self.attack_func(data=data, target=target)
+                    data, target = self.attack_func(data=data, target=target, **self.attack_args)
 
                 output = local_model(data)
                 loss = nn.CrossEntropyLoss()(output, target)

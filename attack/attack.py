@@ -9,11 +9,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Attack:
     def __init__(self, attack_args):
-        attack_type = attack_args['attack_type']
+        attack_type = attack_args.get('attack_type', None)
 
         # Attack on Data
         if attack_type == 'flip_labels':
             self.func = self.flip_labels
+        elif attack_type == 'backdoor':
+            self.func = self.backdoor
         # Attack on Parameters
         elif attack_type == 'random_parameters':
             self.func = self.random_parameters
@@ -26,10 +28,25 @@ class Attack:
             self.func = self.gaussian_additive_attack
         elif attack_type == 'lie_attack':
             self.func = self.lie_attack
+        elif attack_type is not None:
+            raise Exception("Attack type is invalid.")
 
     # Attack on Data
     def flip_labels(*args, **kwargs):
-        return kwargs['data'], max(kwargs['target'].tolist()) - kwargs['target']
+        return kwargs['data'], kwargs['max_label'] - kwargs['target']
+
+    def backdoor(*args, **kwargs):
+        backdoor_pattern = kwargs.get('backdoor_pattern', None)
+        backdoor_target = kwargs.get('backdoor_target', None)
+        i, j, h, w, v = backdoor_pattern['i'], backdoor_pattern['j'], backdoor_pattern['h'], backdoor_pattern['w'], backdoor_pattern['v']
+        kwargs['data'][:, :, i:i+h, j:j+w] = v            
+        if backdoor_target is not None:
+            if backdoor_target == "random":
+                kwargs['target'] = torch.randint(kwargs.get('min_label', 0), kwargs['max_label'], size=kwargs['target'].size())
+            else:
+                kwargs['target'].fill_(backdoor_target)
+
+        return kwargs['data'], kwargs['target']
 
     # Attack on Parameters
     def random_parameters(*args, **kwargs):

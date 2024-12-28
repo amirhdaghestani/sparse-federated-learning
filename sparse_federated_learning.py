@@ -2,14 +2,14 @@ import wandb
 import copy
 import torch
 
-from model.model import SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
+from model.model import AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
 from server.server import Server
 from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
 
 # MODEL = torch.load("./models/three_layer_fc.pt")
-MODEL = SimpleCNNWithBatchNorm()
+MODEL = AlexNet()
 
 
 def train(model):
@@ -90,7 +90,7 @@ if __name__ == "__main__":
             project="test",
             config={
                 "aggregate_type": "fedavg", # sparse or fedavg
-                "dataset_name": "MNIST",
+                "dataset_name": "CIFAR10",
                 "num_clients": 200,
                 "fraction_malicious": 0.25,
                 "total_epochs": 200,
@@ -99,12 +99,18 @@ if __name__ == "__main__":
                 "q_factor": 0.6,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "boost_gradient",
-                    "attack_epoch" : 20,
-                    "boost_factor" : -2.5
+                    "attack_type" : "backdoor",
+                    "attack_epoch" : 2,
+                    "backdoor_pattern" : {'i': 0,
+                                          'j': 0,
+                                          'h': 10,
+                                          'w': 10,
+                                          'v': 2.82148653034729},
+                    "backdoor_target": "random",
+                    "max_label": 9
                 },
                 "defence_args": {
-                    "defence_type" : "bulyan",
+                    "defence_type" : "no_defence",
                     "bulyan_factor" : 25,
                     "krum_factor" : int((1 - 0.25) * 200)
                 },
