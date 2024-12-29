@@ -90,7 +90,7 @@ if __name__ == "__main__":
         wandb.init(
             project="test",
             config={
-                "aggregate_type": "fedavg", # sparse or fedavg
+                "aggregate_type": "sparse", # sparse or fedavg
                 "dataset_name": "CIFAR10",
                 "num_clients": 200,
                 "fraction_malicious": 0.25,

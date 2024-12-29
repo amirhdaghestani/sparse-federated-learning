@@ -312,7 +312,7 @@ class BaseServer:
 
         return client_gradients, client_losses
 
-    def calculate_accuracy(self, is_fedavg=False):
+    def calculate_accuracy(self):
         """
         Evaluates the model on the test dataset.
         For FedAvg, typically uses a separate global model 

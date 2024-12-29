@@ -41,7 +41,7 @@ class FedAvgServer(BaseServer):
 
             # Evaluate periodically
             if epoch % self.evaluate_each_epoch == 0:
-                test_acc, test_loss = self.calculate_accuracy(is_fedavg=True)
+                test_acc, test_loss = self.calculate_accuracy()
                 wandb.log({
                     "fedavg_test_accuracy": test_acc,
                     "fedavg_test_loss": test_loss

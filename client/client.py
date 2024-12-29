@@ -96,12 +96,24 @@ class Client:
             if epoch == self.local_epoch - 1:
                 avg_loss = total_loss / num_batches if return_avg_loss else None
 
-        grads = total_grads
-        
         if return_params:
             params = {key: local_model.state_dict()[key] - global_weights[key] for key in global_weights.keys()}
         else:
-            params = grads
+            # params = total_grads
+            # params = [-1 * (local_model.state_dict()[key] - global_weights[key]) / lr for key in global_weights.keys()]
+
+            # Get the keys for trainable parameters only
+            trainable_keys = [name for name, _ in local_model.named_parameters()]
+
+            # Compute parameter updates only for trainable parameters
+            params = [
+                [-1 * (local_model.state_dict()[key] - global_weights[key]) / lr
+                for key in trainable_keys]
+            ]
+            params.append(
+                [-1 * (local_model.state_dict()[key] - global_weights[key]) / lr
+                for key in global_weights.keys()]
+            )
 
         del local_model
 
