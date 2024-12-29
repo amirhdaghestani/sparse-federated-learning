@@ -42,7 +42,7 @@ class Attack:
         kwargs['data'][:, :, i:i+h, j:j+w] = v            
         if backdoor_target is not None:
             if backdoor_target == "random":
-                kwargs['target'] = torch.randint(kwargs.get('min_label', 0), kwargs['max_label'], size=kwargs['target'].size())
+                kwargs['target'] = torch.randint(kwargs.get('min_label', 0), kwargs['max_label'], size=kwargs['target'].size(),device=device)
             else:
                 kwargs['target'].fill_(backdoor_target)
 

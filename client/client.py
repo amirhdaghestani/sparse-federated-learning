@@ -85,9 +85,10 @@ class Client:
 
                     optimizer.step()
 
-                    if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
-                        output = local_model(data)
-                        loss = nn.CrossEntropyLoss()(output, target)
+                    # Remove temporarily
+                    # if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                    #     output = local_model(data)
+                    #     loss = nn.CrossEntropyLoss()(output, target)
 
                 total_loss += loss.item()
                 num_batches += 1

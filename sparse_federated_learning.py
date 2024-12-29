@@ -9,7 +9,8 @@ from server.server_fedavg import FedAvgServer
 
 
 # MODEL = torch.load("./models/three_layer_fc.pt")
-MODEL = AlexNet()
+# MODEL = AlexNet()
+MODEL = torch.load("./models/alexnet.pt")
 
 
 def train(model):
@@ -51,7 +52,7 @@ def train(model):
             "max_line_search_iterations_alpha": 0,
             "c_beta": 1e-3,
             "rho_beta": 0.5,
-            "max_line_search_iterations_beta": 100,
+            "max_line_search_iterations_beta": 0,
         }
         server = SparseFLServer(**server_args)
         server.run(**sparse_params)
@@ -99,8 +100,8 @@ if __name__ == "__main__":
                 "q_factor": 0.6,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "backdoor",
-                    "attack_epoch" : 2,
+                    "attack_type" : "flip_labels",
+                    "attack_epoch" : 20,
                     "backdoor_pattern" : {'i': 0,
                                           'j': 0,
                                           'h': 10,
@@ -111,8 +112,8 @@ if __name__ == "__main__":
                 },
                 "defence_args": {
                     "defence_type" : "no_defence",
-                    "bulyan_factor" : 25,
-                    "krum_factor" : int((1 - 0.25) * 200)
+                    # "bulyan_factor" : 25,
+                    # "krum_factor" : int((1 - 0.25) * 200)
                 },
                 "lambda_max": 0.0025,
                 "lambda_end_epoch": 100,
