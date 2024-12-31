@@ -101,7 +101,14 @@ class Client:
         if return_params:
             params = {key: local_model.state_dict()[key] - global_weights[key] for key in global_weights.keys()}
         else:
-            params = grads
+            # Get the keys for trainable parameters only
+            trainable_keys = [name for name, _ in local_model.named_parameters()]
+
+            # Compute parameter updates only for trainable parameters
+            params = [
+                -1 * (local_model.state_dict()[key] - global_weights[key]) / lr
+                for key in trainable_keys
+            ]
 
         del local_model
 

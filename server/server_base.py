@@ -39,7 +39,8 @@ class BaseServer:
         model=SimpleCNNWithBatchNorm(),
         evaluate_each_epoch=2,
         local_epochs=1,
-        batch_size=64
+        batch_size=64,
+        malicious_type="group_oriented"
     ):
         """
         Parameters
@@ -65,6 +66,9 @@ class BaseServer:
         local_epochs : int
             Number of local epochs for each client.
         """
+        # Assertion
+        assert malicious_type in ["group_oriented", "random"]
+
         # Models
         self.global_model = copy.deepcopy(model).to(device)
         self.num_clients = 0
@@ -96,14 +100,15 @@ class BaseServer:
             fraction_malicious=fraction_malicious,
             attack_args=attack_args,
             q_factor=q_factor,
-            batch_size=batch_size
+            batch_size=batch_size,
+            malicious_type=malicious_type
         )
 
         # For Sparse FL line-search
         self.list_m_next = []
         self.list_w_next = []
 
-    def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor, batch_size):
+    def _initialize_clients(self, dataset_name, num_clients, model, fraction_malicious, attack_args, q_factor, batch_size, malicious_type):
         """
         Loads data, creates client data loaders, and marks some clients as malicious.
         """
@@ -112,10 +117,17 @@ class BaseServer:
 
         # Number of classes = max label + 1
         num_label = max(self.train_dataset.targets.tolist()) + 1
-        client_loaders = self._distribute_dataset(self.train_dataset, num_label=num_label, q_factor=q_factor, batch_size=batch_size)
+        client_loaders, group2client_idx = self._distribute_dataset(self.train_dataset, num_label=num_label, q_factor=q_factor, batch_size=batch_size)
 
-        num_malicious = int(fraction_malicious * num_clients)
-        malicious_ids = random.sample(range(num_clients), num_malicious)
+        if malicious_type == "random":
+            num_malicious = int(fraction_malicious * num_clients)
+            malicious_ids = random.sample(range(num_clients), num_malicious)
+        elif malicious_type == "group_oriented":
+            num_group_malicious = int(fraction_malicious * num_label)
+            group_malicious_ids = random.sample(range(num_label), num_group_malicious)
+            malicious_ids = []
+            for group_malicious_id in group_malicious_ids:
+                malicious_ids.extend(np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist())
         print(f"Malicious Client Indices: {malicious_ids}")
 
         clients = []
@@ -249,7 +261,7 @@ class BaseServer:
             loader = torch.utils.data.DataLoader(subset_ds, batch_size=batch_size, shuffle=True)
             client_loaders.append(loader)
 
-        return client_loaders
+        return client_loaders, group2client_idx
 
     def _flatten_tensors(self, input_list):
         """
@@ -304,7 +316,7 @@ class BaseServer:
         ):
             # Malicious manipulation of benign updates
             client_gradients, client_losses = self.attack_func(
-                grads=client_gradients,
+                grads=client_gradients["grads"] if "grads" in client_gradients.keys() else client_gradients,
                 losses=client_losses,
                 clients=self.clients,
                 **(self.attack_args if self.attack_args else {})

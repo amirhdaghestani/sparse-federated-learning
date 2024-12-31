@@ -50,7 +50,11 @@ class Attack:
 
     # Attack on Parameters
     def random_parameters(*args, **kwargs):
-        return {name: torch.normal(mean=kwargs['random_parameters_mean'], std=kwargs['random_parameters_std'], size=param.shape).to(device) for name, param in kwargs['global_weights'].items()}
+        mean, std, device = kwargs['random_parameters_mean'], kwargs['random_parameters_std'], device
+        global_weights = kwargs['global_weights']
+        random_parameters = {name: param + torch.normal(mean, std, size=param.shape, device=device) 
+                             for name, param in global_weights.items()}
+        return random_parameters
 
     # Attack on Gradient
     def boost_gradient(*args, **kwargs):

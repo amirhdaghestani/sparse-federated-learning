@@ -190,15 +190,17 @@ class SparseFLServer(BaseServer):
                     param.data = params_copy[name].data - alpha * agg_grad
 
         updated_weights = self.global_model.state_dict()
-        # Now gather new client updates from the updated model
+
+        # Gather new local updates
         updated_grads, updated_losses = self._gather_client_updates(
-            updated_weights, 
-            epoch, 
-            lr=alpha, 
-            compute_gradient=True, 
-            return_avg_loss=True
+            updated_weights,
+            epoch=epoch,
+            lr=alpha,
+            return_avg_loss=True,
+            compute_gradient=True
         )
-        # Overwrite G_next, F_T_next in place
+
+        # Overwrite inputs in place
         G_next[:] = updated_grads
         F_T_next[:] = updated_losses
 

@@ -2,7 +2,7 @@ import wandb
 import copy
 import torch
 
-from model.model import AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
+from model.model import DeeperCIFARCNN, AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
 from server.server import Server
 from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
@@ -10,7 +10,8 @@ from server.server_fedavg import FedAvgServer
 
 # MODEL = torch.load("./models/three_layer_fc.pt")
 # MODEL = AlexNet()
-MODEL = torch.load("./models/alexnet.pt")
+# MODEL = torch.load("./models/alexnet.pt")
+MODEL = DeeperCIFARCNN()
 
 
 def train(model):
@@ -22,10 +23,12 @@ def train(model):
     total_epochs = config.get("total_epochs", 10)
     q_factor = config.get("q_factor", 0.1)
     evaluate_each_epoch = config.get("evaluate_each_epoch", 1)
-    attack_args = config.get("attack_args", {})
-    defence_args = config.get("defence_args", {})
+    attack_args = config.get("attack_args", None)
+    defence_args = config.get("defence_args", None)
     aggregate_type = config.get("aggregate_type", "fedavg")
     batch_size = config.get("batch_size", 64)
+    local_epochs = config.get("local_epochs", 1)
+    malicious_type = config.get("malicious_type", "group_oriented")
 
     # Common arguments for both servers
     server_args = {
@@ -38,7 +41,9 @@ def train(model):
         "q_factor": q_factor,
         "model": model,
         "evaluate_each_epoch": evaluate_each_epoch,
-        "batch_size": batch_size
+        "batch_size": batch_size,
+        "local_epochs": local_epochs,
+        "malicious_type": malicious_type,
     }
 
     if aggregate_type == "sparse":
@@ -90,10 +95,10 @@ if __name__ == "__main__":
         wandb.init(
             project="test",
             config={
-                "aggregate_type": "fedavg", # sparse or fedavg
+                "aggregate_type": "sparse", # sparse or fedavg
                 "dataset_name": "CIFAR10",
-                "num_clients": 200,
-                "fraction_malicious": 0.25,
+                "num_clients": 50,
+                "fraction_malicious": 0.4,
                 "total_epochs": 200,
                 "alpha": 0.01,
                 "beta": 1e-4,
@@ -101,13 +106,13 @@ if __name__ == "__main__":
                 "evaluate_each_epoch": 1,
                 "attack_args": {
                     "attack_type" : "flip_labels",
-                    "attack_epoch" : 20,
-                    "backdoor_pattern" : {'i': 0,
-                                          'j': 0,
-                                          'h': 10,
-                                          'w': 10,
-                                          'v': 2.82148653034729},
-                    "backdoor_target": "random",
+                    "attack_epoch" : 2,
+                    # "backdoor_pattern" : {'i': 0,
+                    #                       'j': 0,
+                    #                       'h': 10,
+                    #                       'w': 10,
+                    #                       'v': 2.82148653034729},
+                    # "backdoor_target": "random",
                     "max_label": 9
                 },
                 "defence_args": {
@@ -117,7 +122,9 @@ if __name__ == "__main__":
                 },
                 "lambda_max": 0.0025,
                 "lambda_end_epoch": 100,
-                "batch_size": 64
+                "batch_size": 64,
+                "local_epochs": 3,
+                "malicious_type": "group_oriented"
             }
         )
         train(MODEL)
