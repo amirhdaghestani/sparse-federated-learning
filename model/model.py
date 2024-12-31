@@ -153,7 +153,7 @@ class AlexNet(nn.Module):
                 init.normal_(m.weight, 0, 0.01)
                 init.constant_(m.bias, 0)
 
-# A CIFAR10 Convnet
+# A Convnet
 class DeeperCIFARCNN(nn.Module):
     def __init__(self, num_classes=10):
         super(DeeperCIFARCNN, self).__init__()

@@ -8,9 +8,6 @@ from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
 
-# MODEL = torch.load("./models/three_layer_fc.pt")
-# MODEL = AlexNet()
-# MODEL = torch.load("./models/alexnet.pt")
 MODEL = DeeperCIFARCNN()
 
 
@@ -107,18 +104,10 @@ if __name__ == "__main__":
                 "attack_args": {
                     "attack_type" : "flip_labels",
                     "attack_epoch" : 2,
-                    # "backdoor_pattern" : {'i': 0,
-                    #                       'j': 0,
-                    #                       'h': 10,
-                    #                       'w': 10,
-                    #                       'v': 2.82148653034729},
-                    # "backdoor_target": "random",
                     "max_label": 9
                 },
                 "defence_args": {
                     "defence_type" : "no_defence",
-                    # "bulyan_factor" : 25,
-                    # "krum_factor" : int((1 - 0.25) * 200)
                 },
                 "lambda_max": 0.0025,
                 "lambda_end_epoch": 100,
@@ -131,6 +120,7 @@ if __name__ == "__main__":
 
     train_wrapper()
 
+    # To run for different hyperparameters
     # sweep_id = wandb.sweep(sweep_config_fedavg, project="federated_learning_sweep_fixed")
     # wandb.agent(sweep_id, function=train_wrapper)
 
