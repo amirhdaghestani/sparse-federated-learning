@@ -102,9 +102,11 @@ if __name__ == "__main__":
                 "q_factor": 0.6,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "flip_labels",
-                    "attack_epoch" : 2,
-                    "max_label": 9
+                    "attack_type" : "random_parameters",
+                    "attack_epoch" : 0,
+                    "random_parameters_mean": 0,
+                    "random_parameters_std": 0.1,
+                    "random_parameters_add_noise": True
                 },
                 "defence_args": {
                     "defence_type" : "no_defence",
@@ -112,7 +114,7 @@ if __name__ == "__main__":
                 "lambda_max": 0.0025,
                 "lambda_end_epoch": 100,
                 "batch_size": 64,
-                "local_epochs": 3,
+                "local_epochs": 1,
                 "malicious_type": "group_oriented"
             }
         )

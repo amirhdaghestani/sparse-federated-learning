@@ -6,6 +6,7 @@ import copy
 
 from attack.attack import Attack
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

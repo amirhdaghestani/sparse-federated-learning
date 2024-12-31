@@ -50,10 +50,14 @@ class Attack:
 
     # Attack on Parameters
     def random_parameters(*args, **kwargs):
-        mean, std, device = kwargs['random_parameters_mean'], kwargs['random_parameters_std'], device
+        mean, std = kwargs.get('random_parameters_mean', 0), kwargs.get('random_parameters_std', 2)
         global_weights = kwargs['global_weights']
-        random_parameters = {name: param + torch.normal(mean, std, size=param.shape, device=device) 
-                             for name, param in global_weights.items()}
+        if kwargs.get("random_parameters_add_noise", True):
+            random_parameters = {name: param + torch.normal(mean, std * torch.std(param), size=param.shape, device=device) 
+                                for name, param in global_weights.items()}
+        else:
+            random_parameters = {name: torch.normal(mean, std, size=param.shape, device=device) 
+                                for name, param in global_weights.items()}
         return random_parameters
 
     # Attack on Gradient

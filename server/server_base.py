@@ -11,6 +11,7 @@ from client.client import Client
 from attack.attack import Attack
 from defence.defence import Defence
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

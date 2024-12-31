@@ -6,6 +6,7 @@ import numpy as np
 from server.server_base import BaseServer
 from defence.defence import Defence
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

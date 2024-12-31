@@ -6,6 +6,7 @@ import numpy as np
 from server.server_base import BaseServer
 from defence.defence import Defence
 
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -112,10 +113,13 @@ class SparseFLServer(BaseServer):
                 rho_beta
             )
 
+            if w.count(0) / len(w) > 0.4:
+                beta *= 0.7
+
             # Second model update using new w
             self._theta_update(G, G_next, F_T_next, w, alpha, epoch, params_copy)
             avg_loss_after = np.matmul(np.array(F_T_next).T, np.array(w))
-
+    
             print(f"Average Loss Before Weight Update: {avg_loss_before}")
             print(f"Average Loss After Weight Update: {avg_loss_after}")
             print(f"Sparse Weights: {w}")
