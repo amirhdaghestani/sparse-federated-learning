@@ -137,6 +137,14 @@ class SparseFLServer(BaseServer):
                 test_acc, test_loss = self.calculate_accuracy(is_fedavg=False)
                 wandb.log({"test_accuracy": test_acc, "test_loss": test_loss})
 
+                # Check for divergence
+                if test_loss > 9:
+                    wandb.alert(
+                        title="Model Divergence Detected",
+                        text=f"Test loss exceeded threshold: {test_loss}",
+                    )
+                    raise RuntimeError(f"Model diverged at epoch {epoch}: Test loss = {test_loss}")
+
     def _line_search_alpha(self, alpha, G, F_T, w, c, rho, epoch, max_iteration=3):
         """
         Armijo line-search for alpha. 
