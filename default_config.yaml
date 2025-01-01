@@ -1,11 +1,11 @@
 training_config:
-  project_name: federated_learning_project
-  model_name: ThreeLayerFC
+  project_name: sparse_flip_label
+  model_name: DeeperCIFARCNN
   aggregate_type: sparse
-  dataset_name: MNIST
+  dataset_name: CIFAR10
   num_clients: 200
   fraction_malicious: 0.4
-  total_epochs: 200
+  total_epochs: 2
   q_factor: 0.8
   evaluate_each_epoch: 1
   attack_args:
@@ -15,7 +15,7 @@ training_config:
   defence_args:
     defence_type: no_defence
   batch_size: 64
-  local_epochs: 3
+  local_epochs: 1
   malicious_type: group_oriented
   sparse_params:
     alpha: 0.01
@@ -41,13 +41,18 @@ sweep_config:
   parameters:
     alpha:
       values:
-      - 0.025
       - 0.01
-      - 0.006
-      - 0.0015
+      - 0.007
+      - 0.005
+      - 0.0025
     beta:
       values:
       - 0.0008
       - 0.0006
       - 0.0004
       - 0.0002
+    lambda_max:
+      values:
+      - 0.004
+      - 0.003
+      - 0.0025

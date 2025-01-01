@@ -35,7 +35,12 @@ def get_model(model_name):
         raise ValueError(f"Unknown model name: {model_name}")
 
 def train(config, model):
-    """Train model based on configuration."""
+    """
+    Train model based on configuration.
+
+    Automatically retains default sparse_params (alpha, beta, lambda_max)
+    if not overridden in the config (e.g., by a W&B sweep).
+    """
     dataset_name = config.get("dataset_name", "MNIST")
     num_clients = config.get("num_clients", 10)
     fraction_malicious = config.get("fraction_malicious", 0.0)
@@ -49,6 +54,7 @@ def train(config, model):
     local_epochs = config.get("local_epochs", 1)
     malicious_type = config.get("malicious_type", "group_oriented")
 
+    # Common server arguments
     server_args = {
         "dataset_name": dataset_name,
         "num_clients": num_clients,
@@ -65,16 +71,35 @@ def train(config, model):
     }
 
     if aggregate_type == "sparse":
-        sparse_params = config.get("sparse_params", {})
+        # Copy the dictionary so we don't mutate the original
+        sparse_params = config.get("sparse_params", {}).copy()
+
+        # Conditionally override alpha, beta, lambda_max if present in config
+        if "alpha" in config:
+            sparse_params["alpha"] = config["alpha"]
+        if "beta" in config:
+            sparse_params["beta"] = config["beta"]
+        if "lambda_max" in config:
+            # Keep the same structure but replace only the middle value
+            old_lambda = sparse_params.get("lambda_val", [0, 0.0025, 100])
+            sparse_params["lambda_val"] = (old_lambda[0], config["lambda_max"], old_lambda[2])
+
         server = SparseFLServer(**server_args)
         server.run(**sparse_params)
+
     elif aggregate_type == "fedavg":
-        fedavg_params = config.get("fedavg_params", {})
+        fedavg_params = config.get("fedavg_params", {}).copy()
+
+        # Make sure alpha is present
+        if "alpha" in config:
+            fedavg_params["alpha"] = config["alpha"]
         alpha = fedavg_params.get("alpha")
         if alpha is None:
-            raise ValueError("FedAvgServer.run() requires 'alpha' parameter.")
+            raise ValueError("FedAvgServer.run() requires an 'alpha' parameter.")
+        
         server = FedAvgServer(**server_args)
         server.run(alpha=alpha)
+
     else:
         raise ValueError(f"Unknown aggregate_type: {aggregate_type}")
 
@@ -84,6 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--write-config", type=str, help="Path to save the default configuration as .yaml")
     args = parser.parse_args()
 
+    # Default configuration
     default_config = {
         "training_config": {
             "project_name": "federated_learning_project",
@@ -124,42 +150,42 @@ if __name__ == "__main__":
         },
     }
 
+    # Handle --write-config
     if args.write_config:
         write_config_to_yaml(args.write_config, default_config)
         print(f"Default configuration written to {args.write_config}")
         sys.exit()
 
+    # Ensure we have a config file unless we wrote one
     if not args.config:
         print("Error: --config must be provided unless --write-config is used.")
         sys.exit(1)
 
     config = load_config_from_yaml(args.config)
 
+    # Check for both sweep_config and training_config
     if "sweep_config" in config and "training_config" in config:
         sweep_config = config["sweep_config"]
         training_config = config["training_config"]
         project_name = training_config["project_name"]
 
         def train_wrapper():
-            # Initialize wandb before accessing wandb.config
             wandb.init(project=project_name, config=training_config)
-            
-            # Combine training_config and wandb.config
+            # Merge any sweep-updated params with training_config
             combined_config = {**training_config, **dict(wandb.config)}
-            
-            # Get the model and start training
             model = get_model(combined_config.get("model_name", "DeeperCIFARCNN"))
             train(combined_config, model)
 
-        # Start the sweep
         sweep_id = wandb.sweep(sweep_config, project=project_name)
         wandb.agent(sweep_id, function=train_wrapper)
+
     elif "training_config" in config:
         training_config = config["training_config"]
         project_name = training_config["project_name"]
 
-        model = get_model(training_config["model_name"])
         wandb.init(project=project_name, config=training_config)
+        model = get_model(training_config["model_name"])
         train(wandb.config, model)
+
     else:
         print("Invalid configuration file. Must contain both 'training_config' and 'sweep_config' for sweep mode.")
