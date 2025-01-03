@@ -103,6 +103,29 @@ def train(config, model):
     else:
         raise ValueError(f"Unknown aggregate_type: {aggregate_type}")
 
+def nest_dot_keys(config_dict):
+    """
+    Convert keys containing dots (e.g. "sparse_params.alpha") 
+    into nested dictionaries {"sparse_params": {"alpha": ...}}.
+    """
+    from collections import defaultdict
+    nested = {}
+    for k, v in config_dict.items():
+        if "." in k:
+            # e.g. "sparse_params.alpha"
+            parts = k.split(".")
+            # Make sure we have nested dicts
+            current = nested
+            for part in parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            # Set the final key
+            current[parts[-1]] = v
+        else:
+            nested[k] = v
+    return nested
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Federated Learning Training and Sweeps")
     parser.add_argument("--config", type=str, help="Path to the .yaml configuration file")
@@ -144,8 +167,9 @@ if __name__ == "__main__":
             "method": "bayes",
             "metric": {"name": "test_accuracy", "goal": "maximize"},
             "parameters": {
-                "alpha": {"values": [0.025, 0.01, 0.006, 0.0015]},
-                "beta": {"values": [8e-4, 6e-4, 4e-4, 2e-4]},
+                "sparse_params.alpha": {"values": [0.025, 0.01, 0.006, 0.0015]},
+                "sparse_params.beta": {"values": [8e-4, 6e-4, 4e-4, 2e-4]},
+                "sparse_params.lambda_val": {"values": [(0, 0.004, 100), (0, 0.003, 100)]},
             },
         },
     }
@@ -171,8 +195,9 @@ if __name__ == "__main__":
 
         def train_wrapper():
             wandb.init(project=project_name, config=training_config)
+            config_nested = nest_dot_keys(dict(wandb.config))
             # Merge any sweep-updated params with training_config
-            combined_config = {**training_config, **dict(wandb.config)}
+            combined_config = {**training_config, **config_nested}
             model = get_model(combined_config.get("model_name", "DeeperCIFARCNN"))
             train(combined_config, model)
 

@@ -5,15 +5,13 @@ training_config:
   dataset_name: CIFAR10
   num_clients: 200
   fraction_malicious: 0.4
-  total_epochs: 200
+  total_epochs: 100
   q_factor: 0.8
   evaluate_each_epoch: 1
   attack_args:
     attack_type: flip_labels
     attack_epoch: 5
     max_label: 9
-  defence_args:
-    defence_type: no_defence
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -31,8 +29,6 @@ training_config:
     c_beta: 0.001
     rho_beta: 0.5
     max_line_search_iterations_beta: 0
-  fedavg_params:
-    alpha: 0.01
 sweep_config:
   method: bayes
   metric:
@@ -54,7 +50,7 @@ sweep_config:
     sparse_params.lambda_val:
       values:
       - - 0
-        - 0.004
+        - 0.0025
         - 100
       - - 0
         - 0.003
