@@ -2,6 +2,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.init as init
+import torch.nn.functional as F
+
+class ThreeLayerFCNorm(nn.Module): 
+    def __init__(self): 
+        super(ThreeLayerFCNorm, self).__init__() 
+        self.fc1 = nn.Linear(28 * 28, 128) 
+        self.gn1 = nn.GroupNorm(8, 128)  # Group normalization with 4 groups 
+        self.fc2 = nn.Linear(128, 64) 
+        self.gn2 = nn.GroupNorm(4, 64)  # Group normalization with 4 groups 
+        self.fc3 = nn.Linear(64, 10) 
+ 
+    def forward(self, x): 
+        x = x.view(-1, 28 * 28) 
+        x = self.fc1(x) 
+        x = self.gn1(x)  # Apply group normalization 
+        x = torch.relu(x) 
+        x = self.fc2(x) 
+        x = self.gn2(x)  # Apply group normalization 
+        x = torch.relu(x) 
+        return self.fc3(x)
 
 # Simple Three-Layer Fully Connected Model
 class ThreeLayerFC(nn.Module):
@@ -194,3 +214,101 @@ class DeeperCIFARCNN(nn.Module):
         x = self.fc2(x)
 
         return x
+
+def conv3x3(in_channels, out_channels, stride=1):
+    """3x3 convolution with padding"""
+    return nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_channels, out_channels, stride=1, downsample=None, norm_layer=nn.BatchNorm2d, num_groups=32):
+        super(BasicBlock, self).__init__()
+        self.conv1 = conv3x3(in_channels, out_channels, stride)
+        self.norm1 = norm_layer(out_channels) if norm_layer != nn.GroupNorm else norm_layer(num_groups, out_channels)
+        self.conv2 = conv3x3(out_channels, out_channels)
+        self.norm2 = norm_layer(out_channels) if norm_layer != nn.GroupNorm else norm_layer(num_groups, out_channels)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x):
+        identity = x
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out = self.conv1(x)
+        out = self.norm1(out)
+        out = F.relu(out)
+
+        out = self.conv2(out)
+        out = self.norm2(out)
+
+        out += identity
+        out = F.relu(out)
+
+        return out
+
+class ResNet(nn.Module):
+    def __init__(self, block, layers, num_classes=10, norm_type="group", num_groups=32):
+        super(ResNet, self).__init__()
+        self.in_channels = 16
+
+        if norm_type == "group":
+            norm_layer = lambda channels: nn.GroupNorm(min(num_groups, channels), channels)
+        elif norm_type == "batch":
+            norm_layer = nn.BatchNorm2d
+        elif norm_type == "layer":
+            norm_layer = nn.LayerNorm
+        else:
+            raise ValueError(f"Unsupported normalization type: {norm_type}")
+
+
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.norm1 = norm_layer(16) if norm_layer != nn.GroupNorm else norm_layer(num_groups, 16)
+        self.relu = nn.ReLU(inplace=True)
+
+        self.layer1 = self._make_layer(block, 16, layers[0], stride=1, norm_layer=norm_layer)
+        self.layer2 = self._make_layer(block, 32, layers[1], stride=2, norm_layer=norm_layer)
+        self.layer3 = self._make_layer(block, 64, layers[2], stride=2, norm_layer=norm_layer)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(64 * block.expansion, num_classes)
+
+    def _make_layer(self, block, out_channels, blocks, stride=1, norm_layer=None):
+        downsample = None
+        if stride != 1 or self.in_channels != out_channels * block.expansion:
+            downsample = nn.Sequential(
+                conv3x3(self.in_channels, out_channels * block.expansion, stride),
+                norm_layer(out_channels * block.expansion) if norm_layer != nn.GroupNorm else nn.GroupNorm(num_groups=32, num_channels=out_channels * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.in_channels, out_channels, stride, downsample, norm_layer))
+        self.in_channels = out_channels * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels, norm_layer=norm_layer))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = self.relu(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+
+        return x
+
+# Instantiate ResNet18
+def ResNet18(num_classes=10, norm_type="group", num_groups=32):
+    return ResNet(BasicBlock, [3, 3, 3], num_classes=num_classes, norm_type=norm_type, num_groups=num_groups)
+
+# Instantiate ResNet20
+def ResNet20(num_classes=10, norm_type="group", num_groups=32):
+    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, norm_type=norm_type, num_groups=num_groups)

@@ -2,13 +2,13 @@ import wandb
 import copy
 import torch
 
-from model.model import DeeperCIFARCNN, AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
+from model.model import DeeperCIFARCNN, AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC, ThreeLayerFCNorm, ResNet18, ResNet20
 from server.server import Server
 from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
 
-MODEL = DeeperCIFARCNN()
+MODEL = ThreeLayerFC()
 
 
 def train(model):
@@ -54,7 +54,7 @@ def train(model):
             "max_line_search_iterations_alpha": 0,
             "c_beta": 1e-3,
             "rho_beta": 0.5,
-            "max_line_search_iterations_beta": 0,
+            "max_line_search_iterations_beta": 10,
         }
         server = SparseFLServer(**server_args)
         server.run(**sparse_params)
@@ -93,29 +93,27 @@ if __name__ == "__main__":
             project="test",
             config={
                 "aggregate_type": "sparse", # sparse or fedavg
-                "dataset_name": "CIFAR10",
-                "num_clients": 50,
+                "dataset_name": "MNIST",
+                "num_clients": 200,
                 "fraction_malicious": 0.4,
                 "total_epochs": 200,
                 "alpha": 0.01,
-                "beta": 1e-4,
+                "beta": 0.001,
                 "q_factor": 0.6,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "random_parameters",
-                    "attack_epoch" : 0,
-                    "random_parameters_mean": 0,
-                    "random_parameters_std": 0.1,
-                    "random_parameters_add_noise": True
+                    "attack_type" : "boost_gradient",
+                    "attack_epoch" : 5,
+                    "boost_factor": -1
                 },
                 "defence_args": {
                     "defence_type" : "no_defence",
                 },
                 "lambda_max": 0.0025,
-                "lambda_end_epoch": 100,
+                "lambda_end_epoch": 15,
                 "batch_size": 64,
                 "local_epochs": 1,
-                "malicious_type": "group_oriented"
+                "malicious_type": "random"
             }
         )
         train(MODEL)

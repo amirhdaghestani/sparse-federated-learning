@@ -3,7 +3,7 @@ import copy
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision import datasets, transforms
+from torchvision import datasets, transforms, models
 import wandb
 
 from model.model import SimpleCNNWithBatchNorm
@@ -353,6 +353,10 @@ class BaseServer:
 
         accuracy = 100.0 * total_correct / total_samples
         avg_loss = total_loss / len(loader)
+
+        # Check for divergence
+        if np.isnan(avg_loss) or avg_loss > 9:
+            raise RuntimeError(f"Model diverged at epoch: Loss = {avg_loss}")
 
         print(f"Test Accuracy = {accuracy:.2f}%, Test Loss: {avg_loss:.4f}")
         return accuracy, avg_loss

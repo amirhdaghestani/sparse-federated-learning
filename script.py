@@ -4,7 +4,7 @@ import wandb
 import yaml
 import torch
 
-from model.model import DeeperCIFARCNN, AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC
+from model.model import DeeperCIFARCNN, AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC, ThreeLayerFCNorm, ResNet18, ResNet20
 from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
@@ -15,6 +15,9 @@ MODEL_MAP = {
     "SimpleCNNWithBatchNorm": SimpleCNNWithBatchNorm,
     "PyTorchLeNet5": PyTorchLeNet5,
     "ThreeLayerFC": ThreeLayerFC,
+    "ThreeLayerFCNorm": ThreeLayerFCNorm,
+    "ResNet18": ResNet18,
+    "ResNet20": ResNet20,
 }
 
 def load_config_from_yaml(filepath):

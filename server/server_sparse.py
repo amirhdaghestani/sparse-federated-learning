@@ -77,11 +77,10 @@ class SparseFLServer(BaseServer):
             return_avg_loss=True, 
             compute_gradient=True
         )
-        G, F_T = client_gradients, client_losses
+        G, F_T_next = client_gradients, client_losses
 
         # For convenience in updates
-        G_next = G
-        F_T_next = F_T
+        G_next = copy.deepcopy(G)
 
         # Main loop
         for epoch in range(self.total_epochs):
@@ -100,16 +99,17 @@ class SparseFLServer(BaseServer):
             params_copy = {k: v.clone() for k, v in self.global_model.state_dict().items()}
 
             # Update global model with G
-            self._theta_update(G, G_next, F_T_next, w, alpha, epoch)
+            self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
+                               compute_gradient=True)
             avg_loss_before = np.matmul(np.array(F_T_next).T, np.array(w))
 
             # Update weights w
             current_lambda = lambda_range[epoch]
             w = self._weight_update(
-                G, G_next, F_T_next, w, alpha, beta, 
-                current_lambda, is_ftotal, 
-                max_line_search_iterations_beta, 
-                c_beta, 
+                G, G_next, F_T_next, w, alpha, beta,
+                current_lambda, is_ftotal,
+                max_line_search_iterations_beta,
+                c_beta,
                 rho_beta
             )
 
@@ -117,7 +117,8 @@ class SparseFLServer(BaseServer):
                 beta *= 0.7
 
             # Second model update using new w
-            self._theta_update(G, G_next, F_T_next, w, alpha, epoch, params_copy)
+            self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
+                               params_copy=params_copy, compute_gradient=True)
             avg_loss_after = np.matmul(np.array(F_T_next).T, np.array(w))
     
             print(f"Average Loss Before Weight Update: {avg_loss_before}")
@@ -131,21 +132,13 @@ class SparseFLServer(BaseServer):
             })
 
             # Move to next iteration
-            G = G_next
+            G = copy.deepcopy(G_next)
             # Evaluate periodically
             if epoch % self.evaluate_each_epoch == 0:
                 test_acc, test_loss = self.calculate_accuracy(is_fedavg=False)
                 wandb.log({"test_accuracy": test_acc, "test_loss": test_loss})
 
-                # Check for divergence
-                if test_loss > 9:
-                    wandb.alert(
-                        title="Model Divergence Detected",
-                        text=f"Test loss exceeded threshold: {test_loss}",
-                    )
-                    raise RuntimeError(f"Model diverged at epoch {epoch}: Test loss = {test_loss}")
-
-    def _line_search_alpha(self, alpha, G, F_T, w, c, rho, epoch, max_iteration=3):
+    def _line_search_alpha(self, alpha, G, F_T_next, w, c, rho, epoch, max_iteration=3):
         """
         Armijo line-search for alpha. 
         Decreases alpha by factor rho if improvement is insufficient.
@@ -174,7 +167,7 @@ class SparseFLServer(BaseServer):
                 return_avg_loss=True, 
                 compute_gradient=False
             )[1]
-            L_new, L_old = np.mean(new_client_losses), np.mean(F_T)
+            L_new, L_old = np.mean(new_client_losses), np.mean(F_T_next)
 
             agg_grad_tensor = torch.cat([v.view(-1) for v in agg_grad_vector])
             # Armijo condition
@@ -185,21 +178,29 @@ class SparseFLServer(BaseServer):
             print("Line search for alpha failed to converge.")
         return alpha
 
-    def _theta_update(self, G, G_next, F_T_next, w, alpha, epoch, params_copy=None):
+    def _theta_update(self, G, G_next, F_T_next, w, alpha, epoch, params_copy=None, compute_gradient=True):
         """
         Updates self.global_model using aggregated gradients from G (weighted by w),
         then gathers new local updates in G_next, F_T_next.
         """
         with torch.no_grad():
             for idx, (name, param) in enumerate(self.global_model.named_parameters()):
+                # Initialize aggregated gradient
                 agg_grad = torch.zeros_like(param)
+
+                # Aggregate weighted gradients from all clients
                 for client_idx, grad_list in enumerate(G):
                     agg_grad += w[client_idx] * grad_list[idx]
-                # Either update from the current param or from a copy
+
+                # Update parameters
                 if params_copy is None:
+                    # Direct update to the parameter
                     param -= alpha * agg_grad
                 else:
-                    param.data = params_copy[name].data - alpha * agg_grad
+                    # Update from a copy of the parameters
+                    if name not in params_copy:
+                        raise ValueError(f"Parameter {name} not found in params_copy.")
+                    param.copy_(params_copy[name] - alpha * agg_grad)
 
         updated_weights = self.global_model.state_dict()
 
@@ -209,7 +210,7 @@ class SparseFLServer(BaseServer):
             epoch=epoch,
             lr=alpha,
             return_avg_loss=True,
-            compute_gradient=True
+            compute_gradient=compute_gradient
         )
 
         # Overwrite inputs in place
@@ -273,10 +274,10 @@ class SparseFLServer(BaseServer):
             w_next_tensor = torch.tensor(w_next_normalize, dtype=torch.float32, device=device)
             f_new = 0.5 * torch.norm(w_next_tensor - m_next) ** 2
             f_current = 0.5 * torch.norm(w_tensor - m_next) ** 2
-            grad_f = (w_tensor - m_next).dot(w_next_tensor - w_tensor)
+            grad_f = torch.abs((w_tensor - m_next).dot(w_next_tensor - w_tensor))
 
             # Armijo condition
-            if f_new <= f_current + c_beta * beta * grad_f:
+            if f_new <= f_current - c_beta * beta * grad_f:
                 break
             else:
                 beta *= rho_beta

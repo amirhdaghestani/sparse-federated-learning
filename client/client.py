@@ -45,7 +45,7 @@ class Client:
             local_model.load_state_dict(global_weights_random)
 
         total_grads = None
-        for epoch in range(self.local_epoch):
+        for local_ep in range(self.local_epoch):
             total_loss = 0
             num_batches = 0
             grad_trajectory = []
@@ -60,42 +60,47 @@ class Client:
 
                 output = local_model(data)
                 loss = nn.CrossEntropyLoss()(output, target)
-                if compute_gradient:
-                    optimizer.zero_grad()
-                    loss.backward()
-                    ## Boost gradient Applied Here param.grad = - boost_factor * param.grad
-                    ## Gaussian Attack Applied Here param.grad = random_normal
-                    ## Gaussian Additive Noise param.grad += random_normal_additive_noise
-                    ## Lie attack param.grad += random_noraml_additive_noise(std=scale_factor * std(param.grad))
+                optimizer.zero_grad()
+                loss.backward()
+                ## Boost gradient Applied Here param.grad = - boost_factor * param.grad
+                ## Gaussian Attack Applied Here param.grad = random_normal
+                ## Gaussian Additive Noise param.grad += random_normal_additive_noise
+                ## Lie attack param.grad += random_noraml_additive_noise(std=scale_factor * std(param.grad))
 
-                    # Attack on Gradient
-                    grads = [param.grad.clone() for param in local_model.parameters()] if compute_gradient else None
-                    if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
-                        grads = self.attack_func(grads=grads, **self.attack_args)
+                # Attack on Gradient
+                grads = [param.grad.clone() for param in local_model.parameters()]
+                if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                    grads = self.attack_func(grads=grads, **self.attack_args)
 
-                        # Apply modified gradients
-                        for param, grad in zip(local_model.parameters(), grads):
-                            param.grad = grad
+                    # Apply modified gradients
+                    for param, grad in zip(local_model.parameters(), grads):
+                        param.grad = grad
 
-                    # Initialize total_grads if it's the first batch
-                    if total_grads is None:
-                        total_grads = [torch.zeros_like(grad) for grad in grads]
+                # Initialize total_grads if it's the first batch
+                if total_grads is None:
+                    total_grads = [torch.zeros_like(grad) for grad in grads]
 
-                    for i, grad in enumerate(grads):
-                        total_grads[i] += grad
+                for i, grad in enumerate(grads):
+                    total_grads[i] += grad
 
-                    optimizer.step()
+                optimizer.step()
 
-                    # Remove temporarily
-                    # if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
-                    #     output = local_model(data)
-                    #     loss = nn.CrossEntropyLoss()(output, target)
+                # Remove temporarily
+                # if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                #     output = local_model(data)
+                #     loss = nn.CrossEntropyLoss()(output, target)
 
                 total_loss += loss.item()
                 num_batches += 1
 
-            if epoch == self.local_epoch - 1:
+                if not compute_gradient:
+                    break
+
+            if local_ep == self.local_epoch - 1 or not compute_gradient:
                 avg_loss = total_loss / num_batches if return_avg_loss else None
+            
+            if not compute_gradient:
+                break
 
         grads = total_grads
         
