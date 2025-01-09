@@ -74,6 +74,7 @@ class BaseServer:
         self.global_model = copy.deepcopy(model).to(device)
         self.num_clients = 0
         self.test_dataset = None
+        self.fraction_malicious = fraction_malicious
 
         # Training configuration
         self.total_epochs = total_epochs
