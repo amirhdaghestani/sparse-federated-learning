@@ -50,15 +50,40 @@ class Attack:
 
     # Attack on Parameters
     def random_parameters(*args, **kwargs):
-        mean, std = kwargs.get('random_parameters_mean', 0), kwargs.get('random_parameters_std', 2)
+        mean_factor = kwargs.get('random_parameters_mean', 0)
+        std_factor = kwargs.get('random_parameters_std', 2)
         global_weights = kwargs['global_weights']
-        if kwargs.get("random_parameters_add_noise", True):
-            random_parameters = {name: param + torch.normal(mean, std * torch.std(param), size=param.shape, device=device) 
-                                for name, param in global_weights.items()}
-        else:
-            random_parameters = {name: torch.normal(mean, std, size=param.shape, device=device) 
-                                for name, param in global_weights.items()}
-        return random_parameters
+
+        # Step 1: Store the original shapes of the tensors
+        original_shapes = {name: param.shape for name, param in global_weights.items()}
+
+        # Step 2: Flatten and concatenate all weights
+        concatenated_weights = torch.cat([param.view(-1) for param in global_weights.values()]).to(device)
+
+        # Step 3: Compute standard deviation and mean of concatenated parameters
+        std_concat = torch.std(concatenated_weights)
+        mean_concat = torch.mean(concatenated_weights)
+
+        # Step 4: Add noise to the concatenated parameters
+        additive_noise = torch.normal(
+            mean=-1 * mean_factor * mean_concat,
+            std=std_factor * std_concat,
+            size=concatenated_weights.shape,
+            device=device
+        )
+        noisy_weights = concatenated_weights + additive_noise
+
+        # Step 5: Split the concatenated tensor back into original shapes
+        split_sizes = [param.numel() for param in global_weights.values()]
+        split_tensors = torch.split(noisy_weights, split_sizes)
+
+        # Step 6: Reshape each split tensor to its original shape
+        reshaped_tensors = {
+            name: tensor.view(shape).to(device)
+            for (name, shape), tensor in zip(original_shapes.items(), split_tensors)
+        }
+
+        return reshaped_tensors
 
     # Attack on Gradient
     def boost_gradient(*args, **kwargs):

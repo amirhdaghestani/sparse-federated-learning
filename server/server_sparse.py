@@ -113,7 +113,7 @@ class SparseFLServer(BaseServer):
                 rho_beta
             )
 
-            if w.count(0) / len(w) > 0.4:
+            if max_line_search_iterations_beta == 0 and w.count(0) / len(w) > self.fraction_malicious:
                 beta *= 0.7
 
             # Second model update using new w
