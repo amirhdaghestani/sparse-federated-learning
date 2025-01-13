@@ -67,28 +67,7 @@ class Client:
                 ## Gaussian Additive Noise param.grad += random_normal_additive_noise
                 ## Lie attack param.grad += random_noraml_additive_noise(std=scale_factor * std(param.grad))
 
-                # Attack on Gradient
-                grads = [param.grad.clone() for param in local_model.parameters()]
-                if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
-                    grads = self.attack_func(grads=grads, **self.attack_args)
-
-                    # Apply modified gradients
-                    for param, grad in zip(local_model.parameters(), grads):
-                        param.grad = grad
-
-                # Initialize total_grads if it's the first batch
-                if total_grads is None:
-                    total_grads = [torch.zeros_like(grad) for grad in grads]
-
-                for i, grad in enumerate(grads):
-                    total_grads[i] += grad
-
                 optimizer.step()
-
-                # Remove temporarily
-                # if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
-                #     output = local_model(data)
-                #     loss = nn.CrossEntropyLoss()(output, target)
 
                 total_loss += loss.item()
                 num_batches += 1
@@ -98,14 +77,22 @@ class Client:
 
             if local_ep == self.local_epoch - 1 or not compute_gradient:
                 avg_loss = total_loss / num_batches if return_avg_loss else None
-            
+
             if not compute_gradient:
                 break
 
-        grads = total_grads
-        
         if return_params:
-            params = {key: local_model.state_dict()[key] - global_weights[key] for key in global_weights.keys()}
+            # Compute parameter updates only for trainable parameters
+            params = [
+                (local_model.state_dict()[key] - global_weights[key])
+                for key in global_weights.keys()
+            ]
+
+            # Attack on Gradient
+            if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                params = self.attack_func(grads=params, **self.attack_args)
+
+            params = {key: params[i] for i, key in enumerate(global_weights.keys())}
         else:
             # Get the keys for trainable parameters only
             trainable_keys = [name for name, _ in local_model.named_parameters()]
@@ -115,6 +102,10 @@ class Client:
                 -1 * (local_model.state_dict()[key] - global_weights[key]) / lr
                 for key in trainable_keys
             ]
+
+            # Attack on Gradient
+            if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
+                params = self.attack_func(grads=params, **self.attack_args)
 
         del local_model
 
