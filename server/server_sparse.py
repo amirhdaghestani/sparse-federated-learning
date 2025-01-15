@@ -8,6 +8,7 @@ from defence.defence import Defence
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 
 class SparseFLServer(BaseServer):
@@ -27,7 +28,8 @@ class SparseFLServer(BaseServer):
         max_line_search_iterations_alpha=0,
         c_beta=1e-2, 
         rho_beta=0.5, 
-        max_line_search_iterations_beta=10
+        max_line_search_iterations_beta=10,
+        estimate_initial_updates=False,
     ):
         """
         Sparse Federated Learning main loop.
@@ -100,7 +102,7 @@ class SparseFLServer(BaseServer):
 
             # Update global model with G
             self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
-                               compute_gradient=True)
+                               compute_gradient=(not(estimate_initial_updates)))
             avg_loss_before = np.matmul(np.array(F_T_next).T, np.array(w))
 
             # Update weights w

@@ -1,13 +1,12 @@
 """ Client Class """
-import numpy as np
 import torch
 import torch.nn as nn
-import copy
 
 from attack.attack import Attack
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+scaler = torch.amp.GradScaler(device.type) if device.type == 'cuda' else None  # Use GradScaler only for CUDA
 
 
 class Client:
@@ -32,7 +31,7 @@ class Client:
             self.attack_func = Attack(attack_args)
 
     def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True, return_params=False, lr=1e-3):
-        local_model = copy.deepcopy(self.model.to(device))
+        local_model = type(self.model)().to(device)
         local_model.load_state_dict(global_weights)
         local_model.train()
 
@@ -44,11 +43,9 @@ class Client:
             global_weights_random = self.attack_func(global_weights=global_weights, **self.attack_args)
             local_model.load_state_dict(global_weights_random)
 
-        total_grads = None
         for local_ep in range(self.local_epoch):
             total_loss = 0
             num_batches = 0
-            grad_trajectory = []
 
             for data, target in self.data_loader:
                 data, target = data.to(device), target.to(device)
@@ -58,16 +55,20 @@ class Client:
                     # If the client is malicious and the current epoch >= attack_epoch, apply attack on input data
                     data, target = self.attack_func(data=data, target=target, **self.attack_args)
 
-                output = local_model(data)
-                loss = nn.CrossEntropyLoss()(output, target)
-                optimizer.zero_grad()
-                loss.backward()
-                ## Boost gradient Applied Here param.grad = - boost_factor * param.grad
-                ## Gaussian Attack Applied Here param.grad = random_normal
-                ## Gaussian Additive Noise param.grad += random_normal_additive_noise
-                ## Lie attack param.grad += random_noraml_additive_noise(std=scale_factor * std(param.grad))
+                with torch.amp.autocast(device_type=device.type):
+                    output = local_model(data)
+                    loss = nn.CrossEntropyLoss()(output, target)
 
-                optimizer.step()
+                optimizer.zero_grad()
+                if device.type == 'cuda':
+                    # Use GradScaler for GPU
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    # Standard backward pass for CPU
+                    loss.backward()
+                    optimizer.step()
 
                 total_loss += loss.item()
                 num_batches += 1
@@ -81,11 +82,13 @@ class Client:
             if not compute_gradient:
                 break
 
+        # Move only the state_dict to CPU
+        state_dict_cpu = {key: value.cpu() for key, value in local_model.state_dict().items()}
+
         if return_params:
             # Compute parameter updates only for trainable parameters
             params = [
-                (local_model.state_dict()[key] - global_weights[key])
-                for key in global_weights.keys()
+                (state_dict_cpu[key] - global_weights[key]) for key in global_weights.keys()
             ]
 
             # Attack on Gradient
@@ -99,7 +102,7 @@ class Client:
 
             # Compute parameter updates only for trainable parameters
             params = [
-                -1 * (local_model.state_dict()[key] - global_weights[key]) / lr
+                -1 * (state_dict_cpu[key] - global_weights[key]) / lr
                 for key in trainable_keys
             ]
 

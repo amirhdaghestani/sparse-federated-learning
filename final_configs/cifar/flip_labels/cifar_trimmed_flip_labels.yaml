@@ -1,27 +1,20 @@
 training_config:
-  project_name: final_mnist_krum_backdoor_random
-  model_name: ThreeLayerFC
+  project_name: final_cifar_trimmed_flip_labels
+  model_name: DeeperCIFARCNN
   aggregate_type: fedavg
-  dataset_name: MNIST
+  dataset_name: CIFAR10
   num_clients: 200
   fraction_malicious: 0.4
   total_epochs: 200
   q_factor: 0.8
   evaluate_each_epoch: 1
   attack_args:
-    attack_type: backdoor
+    attack_type: flip_labels
     attack_epoch: 2
-    backdoor_pattern: 
-      i: 9
-      j: 9
-      h: 10
-      w: 10
-      v: 0
-    backdoor_target: random
     max_label: 9
   defence_args:
-    defence_type: krum
-    krum_factor: 25
+    defence_type: trimmed_factor
+    trimmed_factor: 0.1
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -37,7 +30,6 @@ sweep_config:
       values:
       - 0.9
       - 0.6
-      - 0.4
     fraction_malicious:
       values:
       - 0.4
@@ -47,6 +39,6 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-    defence_args.krum_factor:
+    defence_args.trimmed_factor:
       values:
-      - 170
+      - 0.1

@@ -3,8 +3,7 @@ import copy
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision import datasets, transforms, models
-import wandb
+from torchvision import datasets, transforms
 
 from model.model import SimpleCNNWithBatchNorm
 from client.client import Client
@@ -12,7 +11,7 @@ from attack.attack import Attack
 from defence.defence import Defence
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 
 class BaseServer:
@@ -309,6 +308,8 @@ class BaseServer:
             )
             client_gradients.append(updates)
             client_losses.append(avg_loss)
+
+        torch.cuda.empty_cache()
 
         # Attack on benign updates
         if (

@@ -1,5 +1,11 @@
 import os
 os.environ["WANDB_START_METHOD"] = "thread"
+# Ensure CUDA_VISIBLE_DEVICES is set and process it
+GPUS = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+if GPUS:
+    GPUS = [int(gpu) for gpu in GPUS.split(",")]
+else:
+    GPUS = []  # Default to an empty list if CUDA_VISIBLE_DEVICES is not set
 
 import sys
 import argparse
@@ -160,11 +166,13 @@ def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_
     """
     Manually execute a subset of runs assigned to this agent.
     """
+    global GPUS
+
     # Assign GPU for this agent
     gpu_id = agent_id % num_gpus if num_gpus > 0 else None
     if gpu_id is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-        print(f"[Agent {agent_id}] Assigned to GPU {gpu_id}")
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(GPUS[gpu_id])
+        print(f"[Agent {agent_id}] Assigned to GPU {str(GPUS[gpu_id])}")
     else:
         print(f"[Agent {agent_id}] Running on CPU.")
 
@@ -203,6 +211,8 @@ def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_
             continue
 
 def main():
+    global GPUS
+
     parser = argparse.ArgumentParser(description="Federated Learning Training and Sweeps")
     parser.add_argument("--config", type=str, help="Path to the .yaml configuration file")
     parser.add_argument("--write-config", type=str, help="Path to save the default configuration as .yaml")
@@ -273,6 +283,10 @@ def main():
     num_gpus = args.num_gpus
     num_run_per_config = args.num_run_per_config
     processes = []
+    if len(GPUS) < num_gpus:
+        GPUS = list(range(num_gpus))
+    
+    assert len(GPUS) == num_gpus
 
     # Check for both sweep_config and training_config
     if "sweep_config" in config and "training_config" in config:

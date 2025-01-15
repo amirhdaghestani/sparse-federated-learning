@@ -1,7 +1,5 @@
 """Class for defence"""
 import torch
-import numpy as np
-import copy
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -45,10 +43,10 @@ class Defence:
 
         # Compute pairwise distances between updates efficiently on GPU
         keys = list(delta_local_updates[0].keys())
-        updates_flat = torch.stack([
-            torch.cat([delta_local_updates[i][key].flatten() for key in keys]).to(device)  # Ensure tensors are on GPU
-            for i in range(num_updates)
-        ])
+        updates_flat = torch.empty((num_updates, sum(delta_local_updates[0][key].numel() for key in keys)), device=device)
+
+        for i, update in enumerate(delta_local_updates):
+            updates_flat[i] = torch.cat([update[key].flatten().to(device) for key in keys])
 
         distances = torch.cdist(updates_flat, updates_flat, p=2) ** 2  # Compute pairwise distances on GPU
 
@@ -85,7 +83,7 @@ class Defence:
         return trimmed_weights
 
     def bulyan(self, *args, **kwargs):
-        delta_local_updates = copy.deepcopy(kwargs['delta_local_updates'])
+        delta_local_updates = kwargs['delta_local_updates']
         m = kwargs.get('bulyan_factor', len(delta_local_updates) // 4)
         n = len(delta_local_updates)
 

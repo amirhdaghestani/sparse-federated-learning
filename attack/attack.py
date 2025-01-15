@@ -38,15 +38,32 @@ class Attack:
     def backdoor(*args, **kwargs):
         backdoor_pattern = kwargs.get('backdoor_pattern', None)
         backdoor_target = kwargs.get('backdoor_target', None)
+        if backdoor_pattern is None:
+            raise ValueError("backdoor_pattern is required.")
+    
         i, j, h, w, v = backdoor_pattern['i'], backdoor_pattern['j'], backdoor_pattern['h'], backdoor_pattern['w'], backdoor_pattern['v']
-        kwargs['data'][:, :, i:i+h, j:j+w] = v            
+        C = kwargs['data'] .shape[1]
+        
+        # Apply backdoor to the specified region
+        if isinstance(v, (int, float)):
+            # Single value for all channels
+            kwargs['data'] [:, :, i:i+h, j:j+w] = v
+        elif isinstance(v, torch.Tensor) and v.shape == (C,):
+            # Channel-specific values
+            kwargs['data'] [:, :, i:i+h, j:j+w] = v.view(C, 1, 1)
+        elif isinstance(v, list) and len(v) == C:
+            # Channel-specific values (list)
+            kwargs['data'] [:, :, i:i+h, j:j+w] = torch.tensor(v, device=device).view(C, 1, 1)
+        else:
+            raise ValueError("Invalid value for 'v'. Must be an int, float, or a tensor of shape [C].")
+        
         if backdoor_target is not None:
             if backdoor_target == "random":
-                kwargs['target'] = torch.randint(kwargs.get('min_label', 0), kwargs['max_label'], size=kwargs['target'].size(),device=device)
+                kwargs['target'] = torch.randint(kwargs.get('min_label', 0), kwargs['max_label'], size=kwargs['target'].size(), device=device)
             else:
                 kwargs['target'].fill_(backdoor_target)
 
-        return kwargs['data'], kwargs['target']
+        return kwargs['data'], kwargs['target'] # Number of channels (1 for MNIST, 3 for CIFAR)
 
     # Attack on Parameters
     def random_parameters(*args, **kwargs):

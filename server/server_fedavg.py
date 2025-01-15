@@ -7,9 +7,6 @@ from server.server_base import BaseServer
 from defence.defence import Defence
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
 class FedAvgServer(BaseServer):
     """
     Implements the Federated Averaging strategy on top of the BaseServer.
@@ -88,8 +85,7 @@ class FedAvgServer(BaseServer):
             return_params=True
         )
         # This replaces old local deltas with the new ones
-        for i, param_dict in enumerate(client_params):
-            delta_local_weights[i] = param_dict
+        delta_local_weights[:] = client_params
 
     def _no_defense_aggregate(self, delta_local_updates):
         """
