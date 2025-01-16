@@ -30,7 +30,7 @@ class Client:
             self.attack_epoch = attack_args['attack_epoch']
             self.attack_func = Attack(attack_args)
 
-    def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True, return_params=False, lr=1e-3):
+    def local_update(self, global_weights, epoch, return_avg_loss=True, compute_gradient=True, return_params=False, lr=1e-3, server_device=torch.device("cpu")):
         local_model = type(self.model)().to(device)
         local_model.load_state_dict(global_weights)
         local_model.train()
@@ -82,13 +82,13 @@ class Client:
             if not compute_gradient:
                 break
 
-        # Move only the state_dict to CPU
-        state_dict_cpu = {key: value.cpu() for key, value in local_model.state_dict().items()}
+        # Move only the state_dict to device
+        state_dict = {key: value.to(server_device) for key, value in local_model.state_dict().items()}
 
         if return_params:
             # Compute parameter updates only for trainable parameters
             params = [
-                (state_dict_cpu[key] - global_weights[key]) for key in global_weights.keys()
+                (state_dict[key] - global_weights[key]) for key in global_weights.keys()
             ]
 
             # Attack on Gradient
@@ -102,7 +102,7 @@ class Client:
 
             # Compute parameter updates only for trainable parameters
             params = [
-                -1 * (state_dict_cpu[key] - global_weights[key]) / lr
+                -1 * (state_dict[key] - global_weights[key]) / lr
                 for key in trainable_keys
             ]
 
@@ -110,6 +110,6 @@ class Client:
             if is_under_attack and self.attack_type in self.ATTACK_ON_GRADIENT:
                 params = self.attack_func(grads=params, **self.attack_args)
 
-        del local_model
+        del local_model, optimizer
 
         return params, avg_loss

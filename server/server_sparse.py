@@ -4,11 +4,6 @@ import wandb
 import numpy as np
 
 from server.server_base import BaseServer
-from defence.defence import Defence
-
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = torch.device("cpu")
 
 
 class SparseFLServer(BaseServer):
@@ -229,12 +224,12 @@ class SparseFLServer(BaseServer):
         """
         G_flat = self._flatten_tensors(G)
         G_next_flat = self._flatten_tensors(G_next)
-        w_tensor = torch.tensor(w, dtype=torch.float32, device=device)
-        F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=device)
+        w_tensor = torch.tensor(w, dtype=torch.float32, device=self.device)
+        F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=self.device)
 
         # G^T G_next plus a tiny regularization on the diagonal
         G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-        G_T_G_next += eye_factor * torch.eye(G_T_G_next.shape[0], device=device)
+        G_T_G_next += eye_factor * torch.eye(G_T_G_next.shape[0], device=self.device)
         G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
 
         if is_ftotal:
@@ -273,7 +268,7 @@ class SparseFLServer(BaseServer):
 
         for _ in range(max_line_search_iterations):
             # Evaluate objective
-            w_next_tensor = torch.tensor(w_next_normalize, dtype=torch.float32, device=device)
+            w_next_tensor = torch.tensor(w_next_normalize, dtype=torch.float32, device=self.device)
             f_new = 0.5 * torch.norm(w_next_tensor - m_next) ** 2
             f_current = 0.5 * torch.norm(w_tensor - m_next) ** 2
             grad_f = torch.abs((w_tensor - m_next).dot(w_next_tensor - w_tensor))

@@ -69,6 +69,7 @@ def train(config, model):
     batch_size = config.get("batch_size", 64)
     local_epochs = config.get("local_epochs", 1)
     malicious_type = config.get("malicious_type", "group_oriented")
+    device = config.get("device", "cpu")
 
     # Common server arguments
     server_args = {
@@ -84,6 +85,7 @@ def train(config, model):
         "batch_size": batch_size,
         "local_epochs": local_epochs,
         "malicious_type": malicious_type,
+        "device": device,
     }
 
     if aggregate_type == "sparse":

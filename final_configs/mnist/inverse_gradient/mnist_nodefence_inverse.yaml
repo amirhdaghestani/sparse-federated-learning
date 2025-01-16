@@ -1,27 +1,19 @@
 training_config:
-  project_name: final_cifar_trimmed_backdoor
-  model_name: DeeperCIFARCNN
+  project_name: final_mnist_nodefence_inverse_new
+  model_name: ThreeLayerFC
   aggregate_type: fedavg
-  dataset_name: CIFAR10
+  dataset_name: MNIST
   num_clients: 200
   fraction_malicious: 0.4
-  total_epochs: 400
+  total_epochs: 200
   q_factor: 0.8
   evaluate_each_epoch: 1
   attack_args:
-    attack_type: backdoor
+    attack_type: boost_gradient
     attack_epoch: 2
-    backdoor_pattern:
-      i: 9
-      j: 9
-      h: 10
-      w: 10
-      v: [0, 0, 0]
-    backdoor_target: random
-    max_label: 9
+    boost_factor: -1
   defence_args:
-    defence_type: trimmed_factor
-    trimmed_factor: 0.1
+    defence_type: no_defence
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -46,6 +38,3 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-    defence_args.trimmed_factor:
-      values:
-      - 0.1

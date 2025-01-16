@@ -11,7 +11,7 @@ from attack.attack import Attack
 from defence.defence import Defence
 
 
-device = torch.device("cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class BaseServer:
@@ -40,7 +40,8 @@ class BaseServer:
         evaluate_each_epoch=2,
         local_epochs=1,
         batch_size=64,
-        malicious_type="group_oriented"
+        malicious_type="group_oriented",
+        device="cpu"
     ):
         """
         Parameters
@@ -70,7 +71,15 @@ class BaseServer:
         assert malicious_type in ["group_oriented", "random"]
 
         # Models
-        self.global_model = copy.deepcopy(model).to(device)
+        # Set device dynamically
+        if device == "gpu" and torch.cuda.is_available():
+            self.device = torch.device("cuda")
+            print("Using GPU for computation.")
+        else:
+            self.device = torch.device("cpu")
+            print("Using CPU for computation.")
+
+        self.global_model = model.to(self.device)
         self.num_clients = 0
         self.test_dataset = None
         self.fraction_malicious = fraction_malicious
@@ -82,9 +91,9 @@ class BaseServer:
         
         # Defense and Attack
         self.defence_args = defence_args
-        self.defence_func = None
-        if defence_args is not None:
-            self.defence_func = Defence(defence_args=defence_args)
+        if self.defence_args is None:
+            self.defence_args = {"defence_type": "no_defence"}
+        self.defence_func = Defence(defence_args=self.defence_args)
 
         self.attack_args = attack_args
         self.attack_func = None
@@ -304,12 +313,11 @@ class BaseServer:
                 return_avg_loss=return_avg_loss,
                 compute_gradient=compute_gradient,
                 return_params=return_params,
-                lr=lr
+                lr=lr,
+                server_device=self.device
             )
             client_gradients.append(updates)
             client_losses.append(avg_loss)
-
-        torch.cuda.empty_cache()
 
         # Attack on benign updates
         if (
@@ -344,7 +352,7 @@ class BaseServer:
 
         with torch.no_grad():
             for X, y in loader:
-                X, y = X.to(device), y.to(device)
+                X, y = X.to(self.device), y.to(self.device)
                 out = model(X)
                 loss = loss_fn(out, y)
 

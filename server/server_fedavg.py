@@ -1,7 +1,4 @@
-import copy
-import torch
 import wandb
-import numpy as np
 
 from server.server_base import BaseServer
 from defence.defence import Defence
@@ -45,19 +42,15 @@ class FedAvgServer(BaseServer):
                     "fedavg_test_loss": test_loss
                 })
 
-    def _aggeregate_params(self, delta_local_weights, eta=1):
+    def _aggregate_params(self, delta_local_weights, eta=1):
         """
         Aggregates local parameter updates using a defense function 
         (if any) and updates self.global_model.
         """
-        if self.defence_func is not None:
-            aggregated = self.defence_func(
-                delta_local_updates=delta_local_weights, 
-                **(self.defence_args if self.defence_args else {})
-            )
-        else:
-            # Simple average if no defense
-            aggregated = self._no_defense_aggregate(delta_local_weights)
+        aggregated = self.defence_func(
+            delta_local_updates=delta_local_weights, 
+            **(self.defence_args if self.defence_args else {})
+        )
 
         # Combine aggregated deltas with the current global model
         global_weights = self.global_model.state_dict()
@@ -72,7 +65,7 @@ class FedAvgServer(BaseServer):
         global model, then gathers new local updates.
         """
         # 1. Aggregate client deltas
-        self._aggeregate_params(delta_local_weights)
+        self._aggregate_params(delta_local_weights)
 
         # 2. Gather new local updates for next iteration
         global_weights = self.global_model.state_dict()
@@ -86,16 +79,3 @@ class FedAvgServer(BaseServer):
         )
         # This replaces old local deltas with the new ones
         delta_local_weights[:] = client_params
-
-    def _no_defense_aggregate(self, delta_local_updates):
-        """
-        If no defence mechanism is provided, do an equal average of the updates.
-        """
-        num_clients = len(delta_local_updates)
-        keys = delta_local_updates[0].keys()
-
-        aggregated = {k: torch.zeros_like(delta_local_updates[0][k]) for k in keys}
-        for update in delta_local_updates:
-            for k in keys:
-                aggregated[k] += update[k] / num_clients
-        return aggregated
