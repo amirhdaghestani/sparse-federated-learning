@@ -38,4 +38,3 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-      - 0.008
