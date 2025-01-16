@@ -36,7 +36,6 @@ sweep_config:
       values:
       - 0.9
       - 0.6
-      - 0.4
     fraction_malicious:
       values:
       - 0.4
