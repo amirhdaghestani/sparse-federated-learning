@@ -194,6 +194,31 @@ def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_
             # Merge the run configuration with the base training configuration
             combined_config = nest_dot_keys({**training_config, **run_config})
 
+            num_clients = combined_config.get("num_clients", None)
+            fraction_malicious = combined_config.get("fraction_malicious", None)
+            defence_args = combined_config.get("defence_args", None)
+
+            if defence_args:
+                f = int(fraction_malicious * num_clients)
+
+                # Adjust Krum factor
+                if defence_args['defence_type'] in ['krum', 'bulyan']:
+                    combined_config['defence_args']['krum_factor'] = num_clients - f - 2
+
+                # Adjust Trimmed Mean factor
+                if defence_args['defence_type'] in ['trimmed_mean']:
+                    combined_config['defence_args']['trimmed_factor'] = fraction_malicious
+
+            #     # Adjust Bulyan factor
+            #     if defence_args['defence_type'] in ['bulyan']:
+            #         g = num_clients - 2 * f  # Compute g for Bulyan
+            #         if g <= 4 * f:
+            #             # Adjust bulyan_factor to a feasible value
+            #             combined_config['defence_args']['bulyan_factor'] = num_clients // 4
+            #         else:
+            #             combined_config['defence_args']['bulyan_factor'] = f
+
+
             # Initialize WandB manually with the fetched config
             wandb.init(
                 project=project_name,

@@ -6,7 +6,7 @@ class Defence:
     def __init__(self, defence_args=None):
         defence_type = defence_args.get('defence_type', 'no_defense')
 
-        if defence_type == "no_defense":
+        if defence_type == "no_defence":
             self.func = self.no_defense
         elif defence_type == "krum":
             self.func = self.krum
@@ -15,7 +15,7 @@ class Defence:
         elif defence_type == "bulyan":
             self.func = self.bulyan
         else:
-            self.func = self.no_defense
+            raise ValueError("defence_type is not valid.")
 
     def no_defense(self, *args, **kwargs):
         delta_local_updates = kwargs['delta_local_updates']
