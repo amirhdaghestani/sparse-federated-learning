@@ -41,7 +41,8 @@ class BaseServer:
         local_epochs=1,
         batch_size=64,
         malicious_type="group_oriented",
-        device="cpu"
+        device="cpu",
+        multi_attack_args=None,
     ):
         """
         Parameters
@@ -102,6 +103,8 @@ class BaseServer:
             self.attack_epoch = attack_args.get('attack_epoch', -1)
             self.attack_func = Attack(attack_args=attack_args)
 
+        self.multi_attack_args = multi_attack_args
+
         # Initialize clients
         self.clients = self._initialize_clients(
             dataset_name=dataset_name,
@@ -129,29 +132,93 @@ class BaseServer:
         num_label = max(self.train_dataset.targets.tolist()) + 1
         client_loaders, group2client_idx = self._distribute_dataset(self.train_dataset, num_label=num_label, q_factor=q_factor, batch_size=batch_size)
 
-        if malicious_type == "random":
-            num_malicious = int(fraction_malicious * num_clients)
-            malicious_ids = random.sample(range(num_clients), num_malicious)
-        elif malicious_type == "group_oriented":
-            num_group_malicious = int(fraction_malicious * num_label)
-            group_malicious_ids = random.sample(range(num_label), num_group_malicious)
-            malicious_ids = []
-            for group_malicious_id in group_malicious_ids:
-                malicious_ids.extend(np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist())
-        print(f"Malicious Client Indices: {malicious_ids}")
+        if self.multi_attack_args is not None and len(self.multi_attack_args) > 0:
+            # 1) Check that sum of fractions <= 1.0
+            total_frac = sum(d['fraction_malicious'] for d in self.multi_attack_args)
+            if total_frac != 1.0:
+                raise ValueError(
+                    "Sum of 'fraction_malicious' in multi_attack_args "
+                    f"must equal 1.0 (got {total_frac}). Each attack's fraction "
+                    "is relative to the total fraction of malicious clients."
+                )
 
-        clients = []
-        for i in range(num_clients):
-            is_malicious = (i in malicious_ids)
-            clients.append(Client(
-                client_id=i,
-                model=model,
-                data_loader=client_loaders[i],
-                malicious=is_malicious,
-                attack_args=attack_args,
-                local_epoch=self.local_epochs
-            ))
-        return clients
+            # 2) Prepare an array of client-specific attack args
+            #    (None means benign by default).
+            client_attack_args = [None] * num_clients
+
+            # 3) Randomly assign each attack to the appropriate fraction of clients
+            total_malicious_count = int(fraction_malicious * num_clients)
+            if malicious_type == "random":
+                all_indices = list(range(num_clients))
+                malicious_indices = set(random.sample(all_indices, total_malicious_count))
+            elif malicious_type == "group_oriented":
+                num_group_mal = int(fraction_malicious * num_label)
+                group_malicious_ids = random.sample(range(num_label), num_group_mal)
+                # gather all clients in those groups
+                mal_list = []
+                for g_id in group_malicious_ids:
+                    mal_list.extend(np.where(np.array(group2client_idx) == g_id)[0].tolist())
+                # In case we have more clients than total_malicious_count, randomly pick
+                if len(mal_list) > total_malicious_count:
+                    mal_list = random.sample(mal_list, total_malicious_count)
+                malicious_indices = set(mal_list)
+            else:
+                raise ValueError(f"Unknown malicious_type: {malicious_type}")
+
+            for attack_dict in self.multi_attack_args:
+                relative_fraction = attack_dict['fraction_malicious']
+                n_mal = int(relative_fraction * len(malicious_indices))
+                n_mal = min(n_mal, len(malicious_indices))
+                if n_mal <= 0:
+                    continue  # skip if fraction is too small
+
+                chosen = random.sample(malicious_indices, n_mal)
+                print(f"Malicious Client Indices attack {attack_dict['attack_type']}: {chosen}")
+
+                # Mark them as malicious with this attack config
+                for c in chosen:
+                    client_attack_args[c] = attack_dict
+                # Remove them from the pool
+                malicious_indices -= set(chosen)
+
+            # 4) Create the Client objects
+            clients = []
+            for i in range(num_clients):
+                is_malicious = (client_attack_args[i] is not None)
+                this_attack_args = client_attack_args[i]
+                clients.append(Client(
+                    client_id=i,
+                    model=model,
+                    data_loader=client_loaders[i],
+                    malicious=is_malicious,
+                    attack_args=this_attack_args,
+                    local_epoch=self.local_epochs
+                ))
+            return clients
+        else:
+            if malicious_type == "random":
+                num_malicious = int(fraction_malicious * num_clients)
+                malicious_ids = random.sample(range(num_clients), num_malicious)
+            elif malicious_type == "group_oriented":
+                num_group_malicious = int(fraction_malicious * num_label)
+                group_malicious_ids = random.sample(range(num_label), num_group_malicious)
+                malicious_ids = []
+                for group_malicious_id in group_malicious_ids:
+                    malicious_ids.extend(np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist())
+            print(f"Malicious Client Indices: {malicious_ids}")
+
+            clients = []
+            for i in range(num_clients):
+                is_malicious = (i in malicious_ids)
+                clients.append(Client(
+                    client_id=i,
+                    model=model,
+                    data_loader=client_loaders[i],
+                    malicious=is_malicious,
+                    attack_args=attack_args,
+                    local_epoch=self.local_epochs
+                ))
+            return clients
 
     def _load_dataset(self, dataset_name):
         """
@@ -321,6 +388,7 @@ class BaseServer:
 
         # Attack on benign updates
         if (
+            hasattr(self, 'attack_type') and
             self.attack_type in self.ATTACK_ON_BENIGN_UPDATES and 
             epoch >= self.attack_epoch and 
             self.attack_func is not None

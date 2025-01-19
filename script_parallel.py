@@ -43,7 +43,7 @@ def get_model(model_name):
     }
 
     if model_name in MODEL_MAP:
-        return MODEL_MAP[model_name](num_classes=10)
+        return MODEL_MAP[model_name]()
     else:
         raise ValueError(f"Unknown model name: {model_name}")
 
@@ -70,6 +70,7 @@ def train(config, model):
     local_epochs = config.get("local_epochs", 1)
     malicious_type = config.get("malicious_type", "group_oriented")
     device = config.get("device", "cpu")
+    multi_attack_args = config.get("multi_attack_args", None)
 
     # Common server arguments
     server_args = {
@@ -86,6 +87,7 @@ def train(config, model):
         "local_epochs": local_epochs,
         "malicious_type": malicious_type,
         "device": device,
+        "multi_attack_args": multi_attack_args,
     }
 
     if aggregate_type == "sparse":
