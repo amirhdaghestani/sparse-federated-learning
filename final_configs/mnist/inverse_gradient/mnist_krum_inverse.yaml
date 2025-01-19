@@ -41,5 +41,4 @@ sweep_config:
       - 0.01
     defence_args.krum_factor:
       values:
-      - 130
-      - 170
+      - 150

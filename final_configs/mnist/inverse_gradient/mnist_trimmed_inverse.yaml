@@ -13,7 +13,7 @@ training_config:
     attack_epoch: 2
     boost_factor: -1
   defence_args:
-    defence_type: trimmed_factor
+    defence_type: trimmed_mean
     trimmed_factor: 0.1
   batch_size: 64
   local_epochs: 3
@@ -42,4 +42,3 @@ sweep_config:
     defence_args.trimmed_factor:
       values:
       - 0.1
-      - 0.15

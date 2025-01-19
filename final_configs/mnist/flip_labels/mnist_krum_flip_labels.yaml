@@ -30,7 +30,6 @@ sweep_config:
       values:
       - 0.9
       - 0.6
-      - 0.4
     fraction_malicious:
       values:
       - 0.4
@@ -40,8 +39,6 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-      - 0.008
     defence_args.krum_factor:
       values:
-      - 130
-      - 170
+      - 150

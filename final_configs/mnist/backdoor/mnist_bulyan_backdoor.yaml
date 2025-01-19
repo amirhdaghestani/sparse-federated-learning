@@ -22,7 +22,7 @@ training_config:
   defence_args:
     defence_type: bulyan
     bulyan_factor: 25
-    krum_factor: 170
+    krum_factor: 130
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -38,7 +38,6 @@ sweep_config:
       values:
       - 0.9
       - 0.6
-      - 0.4
     fraction_malicious:
       values:
       - 0.4
@@ -50,4 +49,5 @@ sweep_config:
       - 0.01
     defence_args.bulyan_factor:
       values:
-      - 25
+      - 50
+      - 40

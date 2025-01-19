@@ -310,5 +310,119 @@ def ResNet18(num_classes=10, norm_type="group", num_groups=32):
     return ResNet(BasicBlock, [3, 3, 3], num_classes=num_classes, norm_type=norm_type, num_groups=num_groups)
 
 # Instantiate ResNet20
-def ResNet20(num_classes=10, norm_type="group", num_groups=32):
-    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, norm_type=norm_type, num_groups=num_groups)
+class ResNet20(nn.Module):
+    def __init__(self, num_classes=10):
+        super(ResNet20, self).__init__()
+        self.in_channels = 16
+
+        # Initial convolution layer
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+
+        # Layers
+        self.layer1 = self._make_layer(BasicBlock, 16, 3, stride=1)
+        self.layer2 = self._make_layer(BasicBlock, 32, 3, stride=2)
+        self.layer3 = self._make_layer(BasicBlock, 64, 3, stride=2)
+
+        # Final layers
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(64 * BasicBlock.expansion, num_classes)
+
+    def _make_layer(self, block, out_channels, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.in_channels != out_channels * block.expansion:
+            downsample = nn.Sequential(
+                conv3x3(self.in_channels, out_channels * block.expansion, stride),
+                nn.BatchNorm2d(out_channels * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.in_channels, out_channels, stride, downsample))
+        self.in_channels = out_channels * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+
+        return x
+
+class VGG11(nn.Module):
+    def __init__(self, num_classes=10, init_weights=True):
+        super(VGG11, self).__init__()
+        
+        # Feature extractor
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+        )
+        
+        # Adaptive average pooling
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        
+        # Classifier
+        self.classifier = nn.Sequential(
+            nn.Linear(512 * 7 * 7, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, num_classes),
+        )
+        
+        # Initialize weights if required
+        if init_weights:
+            self._initialize_weights()
+
+    def forward(self, x):
+        x = self.features(x)           # Pass through feature extractor
+        x = self.avgpool(x)            # Apply adaptive average pooling
+        x = torch.flatten(x, 1)        # Flatten the tensor
+        x = self.classifier(x)         # Pass through classifier
+        return x
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
