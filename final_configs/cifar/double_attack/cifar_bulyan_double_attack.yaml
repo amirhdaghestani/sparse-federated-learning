@@ -1,20 +1,27 @@
 training_config:
-  project_name: final_cifar_trimmed_flip_labels
+  project_name: final_cifar_bulyan_double_attack
   model_name: DeeperCIFARCNN
   aggregate_type: fedavg
   dataset_name: CIFAR10
   num_clients: 200
   fraction_malicious: 0.4
-  total_epochs: 200
+  total_epochs: 400
   q_factor: 0.8
   evaluate_each_epoch: 1
-  attack_args:
-    attack_type: flip_labels
-    attack_epoch: 2
-    max_label: 9
+  multi_attack_args:
+    - attack_type: boost_gradient
+      attack_epoch: 5
+      boost_factor: -1
+      fraction_malicious: 0.5
+    - attack_type: random_parameters
+      attack_epoch: 2
+      random_parameters_mean: 5
+      random_parameters_std: 1.5
+      fraction_malicious: 0.5
   defence_args:
-    defence_type: trimmed_factor
-    trimmed_factor: 0.1
+    defence_type: bulyan
+    bulyan_factor: 25
+    krum_factor: 170
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -39,6 +46,6 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-    defence_args.trimmed_factor:
+    defence_args.bulyan_factor:
       values:
-      - 0.1
+      - 50
