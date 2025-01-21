@@ -10,14 +10,14 @@ training_config:
   evaluate_each_epoch: 1
   multi_attack_args:
     - attack_type: boost_gradient
-      attack_epoch: 5
-      boost_factor: -1
-      fraction_malicious: 0.5
-    - attack_type: random_parameters
       attack_epoch: 2
+      boost_factor: -1
+      fraction_malicious: 0.7
+    - attack_type: random_parameters
+      attack_epoch: 5
       random_parameters_mean: 5
       random_parameters_std: 1.5
-      fraction_malicious: 0.5
+      fraction_malicious: 0.3
   defence_args:
     defence_type: no_defence
   batch_size: 64

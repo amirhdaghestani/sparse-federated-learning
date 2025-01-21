@@ -38,24 +38,26 @@ sweep_config:
     q_factor:
       values:
       - 0.8
+      - 0.7
     fraction_malicious:
       values:
-      - 0.4
+      - 0.3
+      - 0.2
+      - 0.1
+      - 0.05
     sparse_params.alpha:
       values:
       - 0.01
     sparse_params.beta:
       values:
       - 0.0024
-      - 0.002
       - 0.0016
-      - 0.0012
       - 0.0008
     sparse_params.lambda_val:
       values:
       - - 0
         - 0.0025
-        - 20
+        - 15
     sparse_params.max_line_search_iterations_beta:
       values:
       - 0

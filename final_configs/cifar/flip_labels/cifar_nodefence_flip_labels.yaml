@@ -31,10 +31,10 @@ sweep_config:
       - 0.7
     fraction_malicious:
       values:
-      - 0.4
       - 0.3
       - 0.2
       - 0.1
+      - 0.05
     fedavg_params.alpha:
       values:
       - 0.01

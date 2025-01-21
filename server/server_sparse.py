@@ -111,7 +111,7 @@ class SparseFLServer(BaseServer):
             )
 
             if max_line_search_iterations_beta == 0 and w.count(0) / len(w) >= self.fraction_malicious:
-                beta *= 0.7
+                beta *= 0.9
 
             # Second model update using new w
             self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
