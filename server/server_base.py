@@ -1,5 +1,4 @@
 import random
-import copy
 import numpy as np
 import torch
 import torch.nn as nn
@@ -48,7 +47,7 @@ class BaseServer:
         Parameters
         ----------
         dataset_name : str
-            Name of the dataset ('MNIST', 'EMNIST', etc.).
+            Name of the dataset ('MNIST', 'CIFAR10', etc.).
         num_clients : int
             Number of clients.
         fraction_malicious : float
@@ -158,6 +157,9 @@ class BaseServer:
                 mal_list = []
                 for g_id in group_malicious_ids:
                     mal_list.extend(np.where(np.array(group2client_idx) == g_id)[0].tolist())
+                if len(mal_list) < total_malicious_count:
+                    g_id = random.sample(set(range(num_label)) - set(group_malicious_ids), 1)
+                    mal_list.extend(np.where(np.array(group2client_idx) == g_id)[0].tolist())
                 # In case we have more clients than total_malicious_count, randomly pick
                 if len(mal_list) > total_malicious_count:
                     mal_list = random.sample(mal_list, total_malicious_count)
@@ -196,8 +198,8 @@ class BaseServer:
                 ))
             return clients
         else:
+            num_malicious = int(fraction_malicious * num_clients)
             if malicious_type == "random":
-                num_malicious = int(fraction_malicious * num_clients)
                 malicious_ids = random.sample(range(num_clients), num_malicious)
             elif malicious_type == "group_oriented":
                 num_group_malicious = int(fraction_malicious * num_label)
@@ -205,6 +207,12 @@ class BaseServer:
                 malicious_ids = []
                 for group_malicious_id in group_malicious_ids:
                     malicious_ids.extend(np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist())
+                if len(malicious_ids) < num_malicious:
+                    group_malicious_id = random.sample(set(range(num_label)) - set(group_malicious_ids), 1)
+                    ids = np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist()
+                    malicious_ids.extend(random.sample(ids, num_malicious - len(malicious_ids)))
+                if len(malicious_ids) > num_malicious:
+                    malicious_ids = random.sample(malicious_ids, num_malicious)
             print(f"Malicious Client Indices: {malicious_ids}")
 
             clients = []
