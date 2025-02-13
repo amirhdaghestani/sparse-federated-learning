@@ -8,7 +8,7 @@ from server.server_sparse import SparseFLServer
 from server.server_fedavg import FedAvgServer
 
 
-MODEL = ThreeLayerFC()
+MODEL = DeeperCIFARCNN()
 
 
 def train(model):
@@ -54,7 +54,7 @@ def train(model):
             "max_line_search_iterations_alpha": 0,
             "c_beta": 1e-3,
             "rho_beta": 0.5,
-            "max_line_search_iterations_beta": 10,
+            "max_line_search_iterations_beta": 0,
         }
         server = SparseFLServer(**server_args)
         server.run(**sparse_params)
@@ -93,27 +93,27 @@ if __name__ == "__main__":
             project="test",
             config={
                 "aggregate_type": "sparse", # sparse or fedavg
-                "dataset_name": "MNIST",
+                "dataset_name": "CIFAR10",
                 "num_clients": 200,
                 "fraction_malicious": 0.4,
                 "total_epochs": 200,
                 "alpha": 0.01,
                 "beta": 0.001,
-                "q_factor": 0.6,
+                "q_factor": 0.9,
                 "evaluate_each_epoch": 1,
                 "attack_args": {
-                    "attack_type" : "boost_gradient",
-                    "attack_epoch" : 5,
-                    "boost_factor": -1
+                    "attack_type" : "flip_labels",
+                    "attack_epoch" : 2,
+                    "max_label": 9
                 },
                 "defence_args": {
                     "defence_type" : "no_defence",
                 },
                 "lambda_max": 0.0025,
                 "lambda_end_epoch": 15,
-                "batch_size": 64,
-                "local_epochs": 1,
-                "malicious_type": "random"
+                "batch_size": 16,
+                "local_epochs": 3,
+                "malicious_type": "group_oriented"
             }
         )
         train(MODEL)

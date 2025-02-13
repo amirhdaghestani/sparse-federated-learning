@@ -4,6 +4,10 @@ import wandb
 import numpy as np
 
 from server.server_base import BaseServer
+from defence.defence import Defence
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class SparseFLServer(BaseServer):
@@ -23,8 +27,7 @@ class SparseFLServer(BaseServer):
         max_line_search_iterations_alpha=0,
         c_beta=1e-2, 
         rho_beta=0.5, 
-        max_line_search_iterations_beta=10,
-        estimate_initial_updates=False,
+        max_line_search_iterations_beta=0
     ):
         """
         Sparse Federated Learning main loop.
@@ -78,11 +81,18 @@ class SparseFLServer(BaseServer):
 
         # For convenience in updates
         G_next = copy.deepcopy(G)
+        start_decay_epoch = 8
+        end_decay_epoch = 50
+        k_value = num_clients
 
         # Main loop
         for epoch in range(self.total_epochs):
             print(f"Epoch {epoch+1}/{self.total_epochs}")
             wandb.log({"epoch": epoch+1})
+
+            if epoch >= start_decay_epoch:
+                decay_factor = min((epoch - start_decay_epoch) / (end_decay_epoch - start_decay_epoch), 1.0)
+                k_value = int(num_clients * (1 - decay_factor * self.fraction_malicious))
 
             # Optionally line-search for alpha
             alpha = self._line_search_alpha(
@@ -97,25 +107,38 @@ class SparseFLServer(BaseServer):
 
             # Update global model with G
             self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
-                               compute_gradient=(not(estimate_initial_updates)))
+                               compute_gradient=True)
             avg_loss_before = np.matmul(np.array(F_T_next).T, np.array(w))
 
-            # Update weights w
             current_lambda = lambda_range[epoch]
+            # threshold for w_i<= t 
+            t = 1/110
+            # Update weights w
             w = self._weight_update(
                 G, G_next, F_T_next, w, alpha, beta,
-                current_lambda, is_ftotal,
+                k_value, t, is_ftotal,
                 max_line_search_iterations_beta,
                 c_beta,
                 rho_beta
             )
-
-            if max_line_search_iterations_beta == 0 and w.count(0) / len(w) >= self.fraction_malicious:
-                beta *= 0.7
-
-            # Second model update using new w
             self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
                                params_copy=params_copy, compute_gradient=True)
+
+            #if max_line_search_iterations_beta == 0 and w.count(0) / len(w) <= self.fraction_malicious + 0.03:
+                #beta *= 0.8
+                # Update weights w
+            #    w = self._weight_update(
+            #    G, G_next, F_T_next, w, alpha, beta,
+            #    k_value, t, is_ftotal,
+            #    max_line_search_iterations_beta,
+            #    c_beta,
+            #    rho_beta
+            #    )
+            #    self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
+            #                   params_copy=params_copy, compute_gradient=True)
+                
+
+            # Second model update using new w
             avg_loss_after = np.matmul(np.array(F_T_next).T, np.array(w))
     
             print(f"Average Loss Before Weight Update: {avg_loss_before}")
@@ -215,7 +238,7 @@ class SparseFLServer(BaseServer):
         F_T_next[:] = updated_losses
 
     def _weight_update(
-        self, G, G_next, F_T_next, w, alpha, beta, lambda_value, is_ftotal,
+        self, G, G_next, F_T_next, w, alpha, beta, k_value, t, is_ftotal,
         max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6
     ):
         """
@@ -224,28 +247,26 @@ class SparseFLServer(BaseServer):
         """
         G_flat = self._flatten_tensors(G)
         G_next_flat = self._flatten_tensors(G_next)
-        w_tensor = torch.tensor(w, dtype=torch.float32, device=self.device)
-        F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=self.device)
+        w_tensor = torch.tensor(w, dtype=torch.float32, device=device)
+        F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=device)
 
         # G^T G_next plus a tiny regularization on the diagonal
         G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-        G_T_G_next += eye_factor * torch.eye(G_T_G_next.shape[0], device=self.device)
+        G_T_G_next = G_T_G_next.to(device)  # Move to the correct device
+        eye_matrix = torch.eye(G_T_G_next.shape[0], device=device)  # Ensure eye matrix is on the same device
+        G_T_G_next += eye_factor * eye_matrix
         G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
 
         if is_ftotal:
             m_next = w_tensor + alpha * beta * G_T_G_next_w - beta * F_T_next_tensor
         else:
             m_next = w_tensor + alpha * beta * G_T_G_next_w
-
-        w_next_normalize = self._sparse_projection_onto_simplex(
-            m_next.cpu().numpy(), 
-            lambda_value
-        )
-
+        w_next_normalize = self._sparse_projection_capped_simplex(m_next.cpu().numpy(), t,
+                                                                  k_value)
         # Line search for beta
         beta, w_next_normalize, m_next = self._line_search_for_beta(
             w_tensor, m_next, w_next_normalize, alpha, beta, 
-            G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, 
+            G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, 
             max_line_search_iterations, c_beta, rho_beta
         )
 
@@ -254,6 +275,7 @@ class SparseFLServer(BaseServer):
         print(f"beta: {beta}")
 
         return w_next_normalize
+
 
     def _line_search_for_beta(
         self, w_tensor, m_next, w_next_normalize, alpha, beta, 
@@ -268,7 +290,7 @@ class SparseFLServer(BaseServer):
 
         for _ in range(max_line_search_iterations):
             # Evaluate objective
-            w_next_tensor = torch.tensor(w_next_normalize, dtype=torch.float32, device=self.device)
+            w_next_tensor = torch.tensor(w_next_normalize, dtype=torch.float32, device=device)
             f_new = 0.5 * torch.norm(w_next_tensor - m_next) ** 2
             f_current = 0.5 * torch.norm(w_tensor - m_next) ** 2
             grad_f = torch.abs((w_tensor - m_next).dot(w_next_tensor - w_tensor))
@@ -291,7 +313,7 @@ class SparseFLServer(BaseServer):
 
         return beta, w_next_normalize, m_next
 
-    def _sparse_projection_onto_simplex(self, m_next, lambda_value):
+    def _sparse_projection_onto_simplex(self, m_next, k_value):
         """
         Projects m_next onto the simplex, ignoring elements with 
         absolute value <= lambda_value.
@@ -301,7 +323,7 @@ class SparseFLServer(BaseServer):
         idxs_desc = np.argsort(m_next)[::-1]
 
         # Identify elements with magnitude > lambda_value
-        valid_mask = np.abs(sorted_m) > lambda_value
+        valid_mask = np.arange(k_value)
         if not np.any(valid_mask):
             return [0.] * len(m_next)
 
@@ -322,5 +344,94 @@ class SparseFLServer(BaseServer):
         P_plus = np.maximum(P_L_lambda - eta, 0)
         w_proj = np.zeros_like(m_next)
         w_proj[idxs_desc[valid_mask]] = P_plus
+
+        return w_proj.tolist()
+    
+    def _sparse_projection_capped_simplex(self, m_next, t, k_value):
+        """
+        Solves the projection onto the generalized capped simplex:
+        
+        min_x 0.5 * ||w - m_next||^2
+        s.t. 0 <= w_i <= t,
+            ||w||_0
+            sum_i w_i = k.
+        
+        Parameters:
+        y0 : numpy array of shape (n,)
+            Input vector.
+        k : float
+            The sum constraint.
+        t : float, optional (default=1)
+            Upper bound for x values.
+        
+        Returns:
+        x : numpy array of shape (n,)
+            Projected vector.
+        e : float
+            0.5 * ||x - y0||^2
+        """
+        k=1
+        sorted_m = np.sort(m_next)[::-1]
+        idxs_desc = np.argsort(m_next)[::-1]
+
+        # Identify elements with magnitude > lambda_value
+        valid_mask = np.arange(k_value)
+        if not np.any(valid_mask):
+            return [0.] * len(m_next)
+
+        y0 = sorted_m[valid_mask]
+        
+        n = len(y0)
+        x = np.zeros(n)
+        
+        if k < 0 or k > n * t:
+            raise ValueError("The sum constraint is infeasible!")
+        
+        if k == 0:
+            e = 0.5 * np.sum((x - y0) ** 2)
+            return x, e
+        
+        if k == n * t:
+            x = np.ones(n) * t
+            e = 0.5 * np.sum((x - y0) ** 2)
+            return x, e
+        
+        # Scale the problem by t
+        y0_scaled = y0 / t
+        k_scaled = k / t
+        
+        # Sort y0 in ascending order
+        idx = np.argsort(y0_scaled)
+        y = y0_scaled[idx]
+        
+        # Test if k is an integer and a == b condition holds
+        if k_scaled == round(k_scaled):
+            b = n - int(k_scaled)
+            if y[b] - y[b - 1] >= 1:
+                x[idx[b:]] = t
+                e = 0.5 * np.sum((x - y0) ** 2)
+        
+        # Assume a = 0
+        s = np.cumsum(y)
+        y = np.append(y, np.inf)  # Append infinity to handle boundary case
+        
+        for b in range(1, n + 1):
+            gamma = (k_scaled + b - n - s[b - 1]) / b
+            if (y[0] + gamma > 0) and (y[b - 1] + gamma < 1) and (y[b] + gamma >= 1):
+                xtmp = np.concatenate((y[:b] + gamma, np.ones(n - b)))
+                x[idx] = xtmp * t  # Scale back
+                e = 0.5 * np.sum((x - y0) ** 2)
+        
+        # Now a >= 1
+        for a in range(1, n):
+            for b in range(a + 1, n + 1):
+                gamma = (k_scaled + b - n + s[a - 1] - s[b - 1]) / (b - a)
+                if (y[a - 1] + gamma <= 0) and (y[a] + gamma > 0) and (y[b - 1] + gamma < 1) and (y[b] + gamma >= 1):
+                    xtmp = np.concatenate((np.zeros(a), y[a:b] + gamma, np.ones(n - b)))
+                    x[idx] = xtmp * t  # Scale back
+                    e = 0.5 * np.sum((x - y0) ** 2)
+        
+        w_proj = np.zeros_like(m_next)
+        w_proj[idxs_desc[valid_mask]] = x
 
         return w_proj.tolist()

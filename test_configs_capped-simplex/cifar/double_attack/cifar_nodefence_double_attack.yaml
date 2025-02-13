@@ -1,0 +1,46 @@
+training_config:
+  project_name: final_cifar_nodefence_double_attack
+  model_name: DeeperCIFARCNN
+  aggregate_type: fedavg
+  dataset_name: CIFAR10
+  num_clients: 200
+  fraction_malicious: 0.4
+  total_epochs: 400
+  q_factor: 0.8
+  evaluate_each_epoch: 1
+  multi_attack_args:
+    - attack_type: boost_gradient
+      attack_epoch: 5
+      boost_factor: -1
+      fraction_malicious: 0.5
+    - attack_type: random_parameters
+      attack_epoch: 2
+      random_parameters_mean: 5
+      random_parameters_std: 1.5
+      fraction_malicious: 0.5
+  defence_args:
+    defence_type: no_defence
+  batch_size: 64
+  local_epochs: 3
+  malicious_type: group_oriented
+  fedavg_params:
+    alpha: 0.01
+sweep_config:
+  method: grid
+  metric:
+    name: test_accuracy
+    goal: maximize
+  parameters:
+    q_factor:
+      values:
+      - 0.8
+      - 0.7
+    fraction_malicious:
+      values:
+      - 0.4
+      - 0.3
+      - 0.2
+      - 0.1
+    fedavg_params.alpha:
+      values:
+      - 0.01

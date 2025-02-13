@@ -1,0 +1,51 @@
+training_config:
+  project_name: final_mnist_krum_backdoor_random
+  model_name: ThreeLayerFC
+  aggregate_type: fedavg
+  dataset_name: MNIST
+  num_clients: 200
+  fraction_malicious: 0.4
+  total_epochs: 200
+  q_factor: 0.8
+  evaluate_each_epoch: 1
+  attack_args:
+    attack_type: backdoor
+    attack_epoch: 2
+    backdoor_pattern: 
+      i: 9
+      j: 9
+      h: 10
+      w: 10
+      v: 0
+    backdoor_target: random
+    max_label: 9
+  defence_args:
+    defence_type: krum
+    krum_factor: 25
+  batch_size: 64
+  local_epochs: 3
+  malicious_type: group_oriented
+  fedavg_params:
+    alpha: 0.01
+sweep_config:
+  method: grid
+  metric:
+    name: test_accuracy
+    goal: maximize
+  parameters:
+    q_factor:
+      values:
+      - 0.9
+      - 0.6
+    fraction_malicious:
+      values:
+      - 0.4
+      - 0.3
+      - 0.2
+      - 0.1
+    fedavg_params.alpha:
+      values:
+      - 0.01
+    defence_args.krum_factor:
+      values:
+      - 130
