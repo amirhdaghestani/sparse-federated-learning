@@ -1,5 +1,5 @@
 training_config:
-  project_name: final_cifar_sparse_flip_labels
+  project_name: test_cifar_sparse_flip_labels_capped_simplex
   model_name: DeeperCIFARCNN
   aggregate_type: sparse
   dataset_name: CIFAR10
