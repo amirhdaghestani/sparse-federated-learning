@@ -27,7 +27,8 @@ class SparseFLServer(BaseServer):
         max_line_search_iterations_alpha=0,
         c_beta=1e-2, 
         rho_beta=0.5, 
-        max_line_search_iterations_beta=0
+        max_line_search_iterations_beta=0,
+        k_inf = (8, 50, None)
     ):
         """
         Sparse Federated Learning main loop.
@@ -81,9 +82,10 @@ class SparseFLServer(BaseServer):
 
         # For convenience in updates
         G_next = copy.deepcopy(G)
-        start_decay_epoch = 8
-        end_decay_epoch = 50
+        start_decay_epoch = k_inf[0]
+        end_decay_epoch = k_inf[1]
         k_value = num_clients
+        t = k_inf[2]
 
         # Main loop
         for epoch in range(self.total_epochs):
@@ -112,7 +114,6 @@ class SparseFLServer(BaseServer):
 
             current_lambda = lambda_range[epoch]
             # threshold for w_i<= t 
-            t = 1/110
             # Update weights w
             w = self._weight_update(
                 G, G_next, F_T_next, w, alpha, beta,
@@ -389,12 +390,12 @@ class SparseFLServer(BaseServer):
         
         if k == 0:
             e = 0.5 * np.sum((x - y0) ** 2)
-            return x, e
+            return x
         
         if k == n * t:
             x = np.ones(n) * t
             e = 0.5 * np.sum((x - y0) ** 2)
-            return x, e
+            return x
         
         # Scale the problem by t
         y0_scaled = y0 / t

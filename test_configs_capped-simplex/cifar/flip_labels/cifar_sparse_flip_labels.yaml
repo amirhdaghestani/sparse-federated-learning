@@ -45,22 +45,36 @@ sweep_config:
     fraction_malicious:
       values:
       - 0.4
-      - 0.3
     sparse_params.alpha:
       values:
       - 0.01
-      - 0.008
     sparse_params.beta:
       values:
-      - 0.0012
       - 0.001
-      - 0.0016
-      - 0.007
+      - 0.0007
+      - 0.002
     sparse_params.lambda_val:
       values:
       - - 0
         - 0.0025
         - 20
+    sparse_params.k_inf:
+      values:
+      -  - 8
+         - 50
+         - 0.0091
+      - - 5
+        - 40
+        - 0.0091
+      - - 15
+        - 55
+        - 0.0091
+      - - 8
+        - 50
+        - 0.0084
+      - - 8
+        - 50
+        - 0.01
     sparse_params.max_line_search_iterations_beta:
       values:
       - 0

@@ -49,6 +49,7 @@ def train(model):
             "beta": config.get("beta", 1e-4),
             "is_ftotal": True,
             "lambda_val": (0, config.get("lambda_max", 0.0025), config.get("lambda_end_epoch", 100)),
+            "k_inf": (config.get("k_start_decay", 8), config.get("k_end_decay", 50), config.get("threshold_capped", 0.01)),
             "c_alpha": 1e-3,
             "rho_alpha": 0.5,
             "max_line_search_iterations_alpha": 0,
@@ -111,6 +112,9 @@ if __name__ == "__main__":
                 },
                 "lambda_max": 0.0025,
                 "lambda_end_epoch": 15,
+                "k_start_decay" : 5,
+                "k_end_decay" : 51,
+                "threshold_capped" : 1/111,
                 "batch_size": 16,
                 "local_epochs": 3,
                 "malicious_type": "group_oriented"
