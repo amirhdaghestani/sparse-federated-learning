@@ -17,7 +17,7 @@ class SparseFLServer(BaseServer):
         alpha, 
         beta, 
         is_ftotal=True, 
-        lambda_val=(0, 0.05, None),
+        k_value=(0, None, None, None),
         c_alpha=1e-4, 
         rho_alpha=0.5, 
         max_line_search_iterations_alpha=0,
@@ -38,8 +38,8 @@ class SparseFLServer(BaseServer):
         is_ftotal : bool
             Flag to indicate if the entire local loss is used (True) 
             or partial in the weight update step.
-        lambda_val : tuple
-            (start, end, end_epoch). If end_epoch is None => use total_epochs. 
+        k_value : tuple
+            (start_epoch, end_epoch, start_val, end_val). If end_epoch is None => use total_epochs. 
             Controls the threshold used in the simplex projection.
         c_alpha : float
             Line-search parameter for alpha.
@@ -54,13 +54,6 @@ class SparseFLServer(BaseServer):
         max_line_search_iterations_beta : int
             Maximum iterations for beta line search.
         """
-
-        # Build the schedule for lambda_value
-        num_steps = lambda_val[-1] if lambda_val[-1] else self.total_epochs
-        lambda_range = np.linspace(lambda_val[0], lambda_val[1], num_steps).tolist()
-        # If the total epochs exceed num_steps, keep the final value for the remainder
-        lambda_range += [lambda_val[1]] * max(0, self.total_epochs - len(lambda_range))
-
         # Initialize weights
         num_clients = len(self.clients)
         w = [1.0 / num_clients] * num_clients
@@ -78,6 +71,24 @@ class SparseFLServer(BaseServer):
 
         # For convenience in updates
         G_next = copy.deepcopy(G)
+
+        # Generate k_values list for each epoch
+        k_values = [num_clients] * self.total_epochs  # Default to num_clients
+
+        start_decay_epoch = k_value[0]
+        end_decay_epoch = k_value[1] if k_value[1] is not None else self.total_epochs
+        start_k_value = k_value[2] if k_value[2] is not None else num_clients
+        end_k_value = k_value[3] if k_value[3] is not None else int((1 - self.fraction_malicious) * num_clients)
+
+        # Linear decay of k_value from start_k_value to end_k_value over the epochs
+        if start_decay_epoch < end_decay_epoch:
+            for epoch in range(start_decay_epoch, end_decay_epoch + 1):
+                progress = (epoch - start_decay_epoch) / (end_decay_epoch - start_decay_epoch)
+                k_values[epoch] = int(start_k_value + progress * (end_k_value - start_k_value))
+
+        # Preserve end_k_value after end_decay_epoch
+        for epoch in range(end_decay_epoch + 1, self.total_epochs):
+            k_values[epoch] = end_k_value
 
         # Main loop
         for epoch in range(self.total_epochs):
@@ -101,10 +112,10 @@ class SparseFLServer(BaseServer):
             avg_loss_before = np.matmul(np.array(F_T_next).T, np.array(w))
 
             # Update weights w
-            current_lambda = lambda_range[epoch]
+            current_k_value = k_values[epoch]
             w = self._weight_update(
                 G, G_next, F_T_next, w, alpha, beta,
-                current_lambda, is_ftotal,
+                current_k_value, is_ftotal,
                 max_line_search_iterations_beta,
                 c_beta,
                 rho_beta
@@ -124,7 +135,7 @@ class SparseFLServer(BaseServer):
             wandb.log({
                 "avg_loss_before_weight_update": float(avg_loss_before),
                 "avg_loss_after_weight_update": float(avg_loss_after),
-                "lambda_current": current_lambda,
+                "k_value_current": current_k_value,
                 "beta": float(beta)
             })
 
@@ -215,7 +226,7 @@ class SparseFLServer(BaseServer):
         F_T_next[:] = updated_losses
 
     def _weight_update(
-        self, G, G_next, F_T_next, w, alpha, beta, lambda_value, is_ftotal,
+        self, G, G_next, F_T_next, w, alpha, beta, k_value, is_ftotal,
         max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6
     ):
         """
@@ -238,14 +249,14 @@ class SparseFLServer(BaseServer):
             m_next = w_tensor + alpha * beta * G_T_G_next_w
 
         w_next_normalize = self._sparse_projection_onto_simplex(
-            m_next.cpu().numpy(), 
-            lambda_value
+            m_next=m_next.cpu().numpy(),
+            k_value=k_value,
         )
 
         # Line search for beta
         beta, w_next_normalize, m_next = self._line_search_for_beta(
             w_tensor, m_next, w_next_normalize, alpha, beta, 
-            G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, 
+            G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, 
             max_line_search_iterations, c_beta, rho_beta
         )
 
@@ -257,7 +268,7 @@ class SparseFLServer(BaseServer):
 
     def _line_search_for_beta(
         self, w_tensor, m_next, w_next_normalize, alpha, beta, 
-        G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, 
+        G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, 
         max_line_search_iterations, c_beta, rho_beta
     ):
         """
@@ -283,44 +294,54 @@ class SparseFLServer(BaseServer):
                 else:
                     m_next = w_tensor + alpha * beta * G_T_G_next_w
                 w_next_normalize = self._sparse_projection_onto_simplex(
-                    m_next.cpu().numpy(), 
-                    lambda_value
+                    m_next=m_next.cpu().numpy(), 
+                    k_value=k_value
                 )
         else:
             print("Line search for beta did not converge within the allotted iterations.")
 
         return beta, w_next_normalize, m_next
 
-    def _sparse_projection_onto_simplex(self, m_next, lambda_value):
+    def _sparse_projection_onto_simplex(self, *args, **kwargs):
         """
-        Projects m_next onto the simplex, ignoring elements with 
-        absolute value <= lambda_value.
+        Alias for the simplex projection method.
         """
-        # Sort in descending order
-        sorted_m = np.sort(m_next)[::-1]
-        idxs_desc = np.argsort(m_next)[::-1]
+        return self._sparse_projection_onto_unit_simplex(*args, **kwargs)
 
-        # Identify elements with magnitude > lambda_value
-        valid_mask = np.abs(sorted_m) > lambda_value
-        if not np.any(valid_mask):
+    def _sparse_projection_onto_unit_simplex(self, m_next, k_value):
+        """
+        Projects m_next onto the simplex by keeping the largest k_value elements.
+        """
+        # Make sure m_next is a NumPy array.
+        m_next = np.array(m_next, dtype=float)
+
+        if k_value < 1 or k_value > len(m_next):
             return [0.] * len(m_next)
 
-        # Subset to valid elements
-        P_L_lambda = sorted_m[valid_mask]
+        # Sort in descending order
+        idxs_desc = np.argsort(m_next)[::-1]
+        sorted_m = m_next[idxs_desc]  # Now valid because m_next is a NumPy array
+
+        # Select the top k elements
+        top_k_idxs = idxs_desc[:k_value]
+        P_L_lambda = sorted_m[:k_value]
+
+        # Compute cumulative sum
         cumsum_vals = np.cumsum(P_L_lambda)
 
-        # Rho condition
-        rhos = (P_L_lambda > (cumsum_vals - 1.0) / np.arange(1, len(P_L_lambda) + 1))
+        # Find rho index
+        rhos = (P_L_lambda > (cumsum_vals - 1.0) / np.arange(1, k_value + 1))
         if np.any(rhos):
             rho_idx = np.where(rhos)[0].max()
             eta = (cumsum_vals[rho_idx] - 1.0) / (rho_idx + 1.0)
         else:
-            # fallback if no candidate
-            eta = cumsum_vals[-1] / len(P_L_lambda)
+            eta = cumsum_vals[-1] / k_value  # fallback
 
-        # Final projection
+        # Apply projection
         P_plus = np.maximum(P_L_lambda - eta, 0)
+
+        # Create projected output
         w_proj = np.zeros_like(m_next)
-        w_proj[idxs_desc[valid_mask]] = P_plus
+        w_proj[top_k_idxs] = P_plus
 
         return w_proj.tolist()
