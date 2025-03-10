@@ -17,7 +17,7 @@ class SparseFLServer(BaseServer):
         alpha, 
         beta, 
         is_ftotal=True, 
-        k_value=(0, None, None, None),
+        k_value=(0, None, None, None, None),
         c_alpha=1e-4, 
         rho_alpha=0.5, 
         max_line_search_iterations_alpha=0,
@@ -89,6 +89,11 @@ class SparseFLServer(BaseServer):
         # Preserve end_k_value after end_decay_epoch
         for epoch in range(end_decay_epoch + 1, self.total_epochs):
             k_values[epoch] = end_k_value
+        
+        # Max Bound:
+        maximum_weight_bound = None
+        if k_value[4] is not None:
+            maximum_weight_bound = k_value[4]
 
         # Main loop
         for epoch in range(self.total_epochs):
@@ -115,14 +120,12 @@ class SparseFLServer(BaseServer):
             current_k_value = k_values[epoch]
             w = self._weight_update(
                 G, G_next, F_T_next, w, alpha, beta,
-                current_k_value, is_ftotal,
+                current_k_value, maximum_weight_bound,
+                is_ftotal,
                 max_line_search_iterations_beta,
                 c_beta,
                 rho_beta
             )
-
-            if max_line_search_iterations_beta == 0 and w.count(0) / len(w) >= self.fraction_malicious:
-                beta *= 0.9
 
             # Second model update using new w
             self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
@@ -226,7 +229,7 @@ class SparseFLServer(BaseServer):
         F_T_next[:] = updated_losses
 
     def _weight_update(
-        self, G, G_next, F_T_next, w, alpha, beta, k_value, is_ftotal,
+        self, G, G_next, F_T_next, w, alpha, beta, k_value, maximum_weight_bound, is_ftotal,
         max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6
     ):
         """
@@ -251,12 +254,13 @@ class SparseFLServer(BaseServer):
         w_next_normalize = self._sparse_projection_onto_simplex(
             m_next=m_next.cpu().numpy(),
             k_value=k_value,
+            t=maximum_weight_bound,
         )
 
         # Line search for beta
         beta, w_next_normalize, m_next = self._line_search_for_beta(
             w_tensor, m_next, w_next_normalize, alpha, beta, 
-            G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, 
+            G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, maximum_weight_bound,
             max_line_search_iterations, c_beta, rho_beta
         )
 
@@ -268,7 +272,7 @@ class SparseFLServer(BaseServer):
 
     def _line_search_for_beta(
         self, w_tensor, m_next, w_next_normalize, alpha, beta, 
-        G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, 
+        G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, maximum_weight_bound,
         max_line_search_iterations, c_beta, rho_beta
     ):
         """
@@ -295,7 +299,8 @@ class SparseFLServer(BaseServer):
                     m_next = w_tensor + alpha * beta * G_T_G_next_w
                 w_next_normalize = self._sparse_projection_onto_simplex(
                     m_next=m_next.cpu().numpy(), 
-                    k_value=k_value
+                    k_value=k_value,
+                    t=maximum_weight_bound,
                 )
         else:
             print("Line search for beta did not converge within the allotted iterations.")
@@ -306,7 +311,12 @@ class SparseFLServer(BaseServer):
         """
         Alias for the simplex projection method.
         """
-        return self._sparse_projection_onto_unit_simplex(*args, **kwargs)
+        t_val = kwargs.get("t", None)
+        if t_val is not None:
+            return self._sparse_projection_capped_simplex(*args, **kwargs)
+        else:
+            kwargs.pop("t", None)
+            return self._sparse_projection_onto_unit_simplex(*args, **kwargs)
 
     def _sparse_projection_onto_unit_simplex(self, m_next, k_value):
         """
@@ -343,5 +353,96 @@ class SparseFLServer(BaseServer):
         # Create projected output
         w_proj = np.zeros_like(m_next)
         w_proj[top_k_idxs] = P_plus
+
+        return w_proj.tolist()
+    
+    def _sparse_projection_capped_simplex(self, m_next, k_value, t):
+        """
+        Projects m_next onto the capped simplex:
+
+            min_w  0.5 * ||w - m_next||^2
+            s.t.   sum_i w_i = 1,   0 <= w_i <= t
+
+        Optionally, only the top 'k_value' largest components
+        of m_next can be non-zero; the rest are forced to 0.
+
+        Parameters
+        ----------
+        m_next : array-like of shape (n,)
+            Input vector.
+        t : float
+            Upper bound (cap) for each coordinate w_i.
+        k_value : int
+            Number of largest components to consider for the projection.
+            All others become 0.
+
+        Returns
+        -------
+        w_proj : list of float
+            A projected vector of the same length as m_next, satisfying
+            sum(w_proj) = 1 (if feasible) and each w_proj[i] <= t.
+        """
+        m_next = np.array(m_next, dtype=float)
+        n_full = len(m_next)
+        k = 1.0
+
+        if k_value < 1:
+            raise ValueError("k_value < 1 is not valid when sum must be 1.")
+
+        idxs_desc = np.argsort(m_next)[::-1]
+        k_value = min(k_value, n_full)
+        valid_mask = idxs_desc[:k_value]
+        y0 = m_next[valid_mask]
+
+        if k_value * t < k:
+            raise ValueError("The sum=1 constraint is infeasible with k_value * t < 1.")
+
+        y0_scaled = y0 / t
+        k_scaled = k / t
+        x_part = np.zeros(k_value, dtype=float)
+        idx_asc = np.argsort(y0_scaled)
+        y_asc = y0_scaled[idx_asc]
+        s_cum = np.cumsum(y_asc)
+        y_asc = np.append(y_asc, np.inf)
+
+        for b in range(1, k_value + 1):
+            gamma = (k_scaled + b - k_value - s_cum[b - 1]) / b
+            if (y_asc[0] + gamma > 0) and (y_asc[b - 1] + gamma < 1) and (y_asc[b] + gamma >= 1):
+                xtmp = np.concatenate((y_asc[:b] + gamma, np.ones(k_value - b)))
+                xtmp *= t
+                x_part[idx_asc] = xtmp
+                w_proj = np.zeros(n_full, dtype=float)
+                w_proj[valid_mask] = x_part
+                if np.isclose(np.sum(w_proj), 1.0, atol=1e-7):
+                    return w_proj.tolist()
+
+        for a in range(1, k_value):
+            for b in range(a + 1, k_value + 1):
+                gamma = (k_scaled + b - k_value + s_cum[a - 1] - s_cum[b - 1]) / (b - a)
+                if (y_asc[a - 1] + gamma <= 0) and (y_asc[a] + gamma > 0) and (y_asc[b - 1] + gamma < 1) and (y_asc[b] + gamma >= 1):
+                    xtmp = np.concatenate((np.zeros(a), y_asc[a:b] + gamma, np.ones(k_value - b)))
+                    xtmp *= t
+                    x_part[idx_asc] = xtmp
+                    w_proj = np.zeros(n_full, dtype=float)
+                    w_proj[valid_mask] = x_part
+                    if np.isclose(np.sum(w_proj), 1.0, atol=1e-7):
+                        return w_proj.tolist()
+
+        needed = 1.0
+        x_part = np.zeros(k_value, dtype=float)
+        for i in range(k_value):
+            if needed >= t:
+                x_part[i] = t
+                needed -= t
+            else:
+                x_part[i] = needed
+                needed = 0.0
+                break
+
+        w_proj = np.zeros(n_full, dtype=float)
+        w_proj[valid_mask] = x_part
+
+        if not np.isclose(np.sum(w_proj), 1.0, atol=1e-7):
+            raise ValueError("Projection failed: sum of w_proj is not close to 1.0")
 
         return w_proj.tolist()
