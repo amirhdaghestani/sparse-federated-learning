@@ -59,11 +59,19 @@ sweep_config:
       values:
       - 0.0006
       - 0.0003
-    sparse_params.lambda_val:
+    sparse_params.k_value:
       values:
-      - - 0
-        - 0.0025
-        - 20
-    sparse_params.max_line_search_iterations_beta:
+      - - 8
+        - 100
+        - null
+        - null
+        - 0.01
+      - - 8
+        - 100
+        - null
+        - null
+        - 0.009
+    normalize_params:
       values:
-      - 0
+      - true
+      - false

@@ -71,6 +71,7 @@ def train(config, model):
     malicious_type = config.get("malicious_type", "group_oriented")
     device = config.get("device", "cpu")
     multi_attack_args = config.get("multi_attack_args", None)
+    normalize_params = config.get("normalize_params", False)
 
     # Common server arguments
     server_args = {
@@ -88,6 +89,7 @@ def train(config, model):
         "malicious_type": malicious_type,
         "device": device,
         "multi_attack_args": multi_attack_args,
+        "normalize_params": normalize_params,
     }
 
     if aggregate_type == "sparse":

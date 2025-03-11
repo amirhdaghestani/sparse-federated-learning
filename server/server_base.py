@@ -42,6 +42,7 @@ class BaseServer:
         malicious_type="group_oriented",
         device="cpu",
         multi_attack_args=None,
+        normalize_params=False,
     ):
         """
         Parameters
@@ -103,6 +104,7 @@ class BaseServer:
             self.attack_func = Attack(attack_args=attack_args)
 
         self.multi_attack_args = multi_attack_args
+        self.normalize_params = normalize_params
 
         # Initialize clients
         self.clients = self._initialize_clients(
@@ -365,6 +367,29 @@ class BaseServer:
             flattened.append(cat)
         return torch.stack(flattened).T
 
+    def _normalize_gradients(self, client_gradients):
+        # Compute the norm of each gradient
+        grad_norms = [torch.norm(torch.cat([g.view(-1) for g in grad])).item() for grad in client_gradients]
+        
+        # Compute the median of the norms
+        median_norm = np.median(grad_norms)
+        
+        # Scale each gradient to have the same norm as the median
+        for i, grad in enumerate(client_gradients):
+            grad_norm = grad_norms[i]
+            if grad_norm > 0:
+                scale_factor = median_norm / grad_norm
+                for j in range(len(grad)):
+                    grad[j] = grad[j] * scale_factor
+
+    def _normalize_losses(self, client_losses):
+        # Compute the median of the losses
+        median_loss = np.median(client_losses)
+        
+        # Scale each loss to have the same value as the median
+        client_losses = [loss * (median_loss / loss) if loss > 0 else loss for loss in client_losses]
+        return client_losses
+
     def _gather_client_updates(
         self,
         global_weights,
@@ -393,6 +418,11 @@ class BaseServer:
             )
             client_gradients.append(updates)
             client_losses.append(avg_loss)
+
+        # Normalize gradients and losses
+        if self.normalize_params:
+            self._normalize_gradients(client_gradients)
+            client_losses = self._normalize_losses(client_losses)
 
         # Attack on benign updates
         if (
