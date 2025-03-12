@@ -1,5 +1,5 @@
 training_config:
-  project_name: final_mnist_sparse_flip_labels
+  project_name: final_mnist_sparse_flip_labels_capped
   model_name: ThreeLayerFC
   aggregate_type: sparse
   dataset_name: MNIST
@@ -12,6 +12,7 @@ training_config:
     attack_type: flip_labels
     attack_epoch: 2
     max_label: 9
+  normalize_params: false
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -19,10 +20,12 @@ training_config:
     alpha: 0.01
     beta: 0.0001
     is_ftotal: true
-    lambda_val:
-    - 0
-    - 0.0025
-    - 100
+    k_value:
+    - 10
+    - 20
+    - null
+    - null
+    - 0.009
     c_alpha: 0.0001
     rho_alpha: 0.5
     max_line_search_iterations_alpha: 0

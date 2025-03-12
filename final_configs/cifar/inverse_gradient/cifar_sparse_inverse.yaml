@@ -1,5 +1,5 @@
 training_config:
-  project_name: final_cifar_sparse_inverse
+  project_name: final_cifar_sparse_inverse_capped
   model_name: DeeperCIFARCNN
   aggregate_type: sparse
   dataset_name: CIFAR10
@@ -12,6 +12,7 @@ training_config:
     attack_type: boost_gradient
     attack_epoch: 2
     boost_factor: -1
+  normalize_params: false
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -19,10 +20,12 @@ training_config:
     alpha: 0.01
     beta: 0.0001
     is_ftotal: true
-    lambda_val:
-    - 0
-    - 0.0025
-    - 100
+    k_value:
+    - 10
+    - 20
+    - null
+    - null
+    - 0.009
     c_alpha: 0.0001
     rho_alpha: 0.5
     max_line_search_iterations_alpha: 0
@@ -53,11 +56,22 @@ sweep_config:
       - 0.0024
       - 0.0016
       - 0.0008
-    sparse_params.lambda_val:
+    sparse_params.k_value:
       values:
-      - - 0
-        - 0.0025
-        - 15
+      - - 8
+        - 100
+        - null
+        - null
+        - 0.01
+      - - 8
+        - 100
+        - null
+        - null
+        - 0.009
+    normalize_params:
+      values:
+      - true
+      - false
     sparse_params.max_line_search_iterations_beta:
       values:
       - 0

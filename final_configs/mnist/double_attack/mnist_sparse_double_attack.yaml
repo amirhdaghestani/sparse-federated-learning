@@ -1,5 +1,5 @@
 training_config:
-  project_name: final_mnist_sparse_double_attack
+  project_name: final_mnist_sparse_double_attack_capped
   model_name: ThreeLayerFC
   aggregate_type: sparse
   dataset_name: MNIST
@@ -18,6 +18,7 @@ training_config:
       random_parameters_mean: 5
       random_parameters_std: 1.5
       fraction_malicious: 0.5
+  normalize_params: false
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -25,10 +26,12 @@ training_config:
     alpha: 0.01
     beta: 0.0001
     is_ftotal: true
-    lambda_val:
-    - 0
-    - 0.0025
-    - 100
+    k_value:
+    - 10
+    - 20
+    - null
+    - null
+    - 0.009
     c_alpha: 0.0001
     rho_alpha: 0.5
     max_line_search_iterations_alpha: 0
