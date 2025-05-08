@@ -1,5 +1,5 @@
 training_config:
-  project_name: final_mnist_sparse_double_attack_capped
+  project_name: final_mnist_sparse_capped_double_attack
   model_name: ThreeLayerFC
   aggregate_type: sparse
   dataset_name: MNIST
@@ -59,9 +59,7 @@ sweep_config:
       - 0.01
     sparse_params.beta:
       values:
-      - 0.002
       - 0.0015
-      - 0.001
       - 0.0005
     sparse_params.k_value:
       values:
@@ -70,12 +68,9 @@ sweep_config:
         - null
         - null
         - 0.01
-      - - 8
-        - 100
-        - null
-        - null
-        - 0.009
     normalize_params:
       values:
-      - true
+      - false
+    sparse_params.normalize_gradient:
+      values:
       - false

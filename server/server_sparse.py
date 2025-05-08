@@ -25,6 +25,7 @@ class SparseFLServer(BaseServer):
         rho_beta=0.5, 
         max_line_search_iterations_beta=10,
         estimate_initial_updates=False,
+        normalize_gradients=False,
     ):
         """
         Sparse Federated Learning main loop.
@@ -53,6 +54,8 @@ class SparseFLServer(BaseServer):
             Reduction factor for beta.
         max_line_search_iterations_beta : int
             Maximum iterations for beta line search.
+        normalize_gradients : bool
+            Whether to normalize gradients during flattening.
         """
         # Initialize weights
         num_clients = len(self.clients)
@@ -70,7 +73,7 @@ class SparseFLServer(BaseServer):
         G, F_T_next = client_gradients, client_losses
 
         # For convenience in updates
-        G_next = copy.deepcopy(G)
+        G_next = [[tensor.clone() for tensor in client_grads] for client_grads in G]
 
         # Generate k_values list for each epoch
         k_values = [num_clients] * self.total_epochs  # Default to num_clients
@@ -89,11 +92,14 @@ class SparseFLServer(BaseServer):
         # Preserve end_k_value after end_decay_epoch
         for epoch in range(end_decay_epoch + 1, self.total_epochs):
             k_values[epoch] = end_k_value
-        
+
         # Max Bound:
         maximum_weight_bound = None
         if k_value[4] is not None:
             maximum_weight_bound = k_value[4]
+        else:
+            weight_bound_slack = k_value[5] if len(k_value) > 5 and k_value[5] is not None else 0.05
+            maximum_weight_bound = 1.0 / (int((1 - weight_bound_slack - self.fraction_malicious) * num_clients))
 
         # Main loop
         for epoch in range(self.total_epochs):
@@ -119,12 +125,13 @@ class SparseFLServer(BaseServer):
             # Update weights w
             current_k_value = k_values[epoch]
             w = self._weight_update(
-                G, G_next, F_T_next, w, alpha, beta,
-                current_k_value, maximum_weight_bound,
-                is_ftotal,
-                max_line_search_iterations_beta,
-                c_beta,
-                rho_beta
+                G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, beta=beta,
+                k_value=current_k_value, maximum_weight_bound=maximum_weight_bound,
+                is_ftotal=is_ftotal,
+                max_line_search_iterations=max_line_search_iterations_beta,
+                c_beta=c_beta,
+                rho_beta=rho_beta,
+                normalize_gradients=normalize_gradients,
             )
 
             # Second model update using new w
@@ -139,11 +146,12 @@ class SparseFLServer(BaseServer):
                 "avg_loss_before_weight_update": float(avg_loss_before),
                 "avg_loss_after_weight_update": float(avg_loss_after),
                 "k_value_current": current_k_value,
-                "beta": float(beta)
+                "beta": float(beta),
+                "weights": [float(weight) for weight in w],
             })
 
             # Move to next iteration
-            G = copy.deepcopy(G_next)
+            G = [[tensor.clone() for tensor in client_grads] for client_grads in G_next]
             # Evaluate periodically
             if epoch % self.evaluate_each_epoch == 0:
                 test_acc, test_loss = self.calculate_accuracy(is_fedavg=False)
@@ -151,7 +159,7 @@ class SparseFLServer(BaseServer):
 
     def _line_search_alpha(self, alpha, G, F_T_next, w, c, rho, epoch, max_iteration=3):
         """
-        Armijo line-search for alpha. 
+        Armijo line-search for alpha.
         Decreases alpha by factor rho if improvement is insufficient.
         """
         if max_iteration == 0:
@@ -225,31 +233,50 @@ class SparseFLServer(BaseServer):
         )
 
         # Overwrite inputs in place
-        G_next[:] = updated_grads
+        for i in range(len(G_next)):
+            for j in range(len(G_next[i])):
+                G_next[i][j].copy_(updated_grads[i][j])
         F_T_next[:] = updated_losses
 
     def _weight_update(
         self, G, G_next, F_T_next, w, alpha, beta, k_value, maximum_weight_bound, is_ftotal,
-        max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6
+        max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6, normalize_gradients=False,
     ):
         """
-        Updates weight vector w (the distribution across clients) with 
-        backtracking line search on beta and projection to a simplex.
+        Memory-optimized weight update
         """
-        G_flat = self._flatten_tensors(G)
-        G_next_flat = self._flatten_tensors(G_next)
+        # Convert w to tensor once
         w_tensor = torch.tensor(w, dtype=torch.float32, device=self.device)
         F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=self.device)
 
-        # G^T G_next plus a tiny regularization on the diagonal
+        # Use in-place operations where possible
+        G_flat = self._flatten_tensors(G, normalize=normalize_gradients)
+        G_next_flat = self._flatten_tensors(G_next, normalize=normalize_gradients)
+        
+        # Compute G^T G_next in-place
         G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-        G_T_G_next += eye_factor * torch.eye(G_T_G_next.shape[0], device=self.device)
-        G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
-
-        if is_ftotal:
-            m_next = w_tensor + alpha * beta * G_T_G_next_w - beta * F_T_next_tensor
+        G_T_G_next.add_(eye_factor * torch.eye(G_T_G_next.shape[0], device=self.device))
+        
+        # Compute G_T_G_next_w in-place
+        G_T_G_next_w = G_T_G_next.matmul(w_tensor)
+        
+        # Compute m_next in-place
+        if is_ftotal is True or is_ftotal == "fedlaw":
+            m_next = w_tensor.clone()
+            m_next.add_(alpha * beta * G_T_G_next_w)
+            m_next.sub_(beta * F_T_next_tensor)
+        elif is_ftotal == "bsum":
+            m_next = w_tensor.clone()
+            m_next.sub_(beta * F_T_next_tensor)
         else:
-            m_next = w_tensor + alpha * beta * G_T_G_next_w
+            m_next = w_tensor.clone()
+            m_next.add_(alpha * beta * G_T_G_next_w)
+
+        # Free memory explicitly
+        del G_flat
+        del G_next_flat
+        del G_T_G_next
+        torch.cuda.empty_cache()  # Clear GPU cache if using CUDA
 
         w_next_normalize = self._sparse_projection_onto_simplex(
             m_next=m_next.cpu().numpy(),
@@ -446,3 +473,43 @@ class SparseFLServer(BaseServer):
             raise ValueError("Projection failed: sum of w_proj is not close to 1.0")
 
         return w_proj.tolist()
+
+    def _flatten_tensors(self, input_list, normalize=False):
+        """
+        Flattens and optionally normalizes gradients in-place using median norm.
+        
+        Parameters
+        ----------
+        input_list : list
+            List of lists of tensors to flatten
+        normalize : bool
+            Whether to normalize the gradients using median norm
+            
+        Returns
+        -------
+        torch.Tensor
+            Concatenated tensor of shape (num_params, num_clients)
+        """
+        if normalize:
+            # First pass: calculate norms and median
+            norms = []
+            for client_grads in input_list:
+                squared_norm = 0
+                for grad in client_grads:
+                    squared_norm += torch.sum(grad * grad)
+                norms.append(torch.sqrt(squared_norm))
+            
+            median_norm = torch.median(torch.stack(norms))
+            
+            # Second pass: flatten and normalize in one go
+            flattened = []
+            for i, client_grads in enumerate(input_list):
+                scale = median_norm / norms[i] if norms[i] > 0 else 1.0
+                flat = torch.cat([grad.view(-1) * scale for grad in client_grads])
+                flattened.append(flat)
+        else:
+            # Just flatten without normalization
+            flattened = [torch.cat([grad.view(-1) for grad in client_grads]) 
+                        for client_grads in input_list]
+        
+        return torch.stack(flattened, dim=1)  # Shape: (num_params, num_clients)

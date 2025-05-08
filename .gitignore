@@ -167,3 +167,4 @@ cython_debug/
 /*/*/*/*
 !/*/*/*/*.yaml
 /*.yaml
+/server/test.py

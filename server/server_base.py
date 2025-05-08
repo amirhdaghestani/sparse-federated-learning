@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
+import wandb
 
 from model.model import SimpleCNNWithBatchNorm
 from client.client import Client
@@ -169,21 +170,39 @@ class BaseServer:
             else:
                 raise ValueError(f"Unknown malicious_type: {malicious_type}")
 
+            all_malicious = list(malicious_indices)
+            random.shuffle(all_malicious)
+
+            split_points = []
+            running_sum = 0.0
             for attack_dict in self.multi_attack_args:
-                relative_fraction = attack_dict['fraction_malicious']
-                n_mal = int(relative_fraction * len(malicious_indices))
-                n_mal = min(n_mal, len(malicious_indices))
-                if n_mal <= 0:
-                    continue  # skip if fraction is too small
+                running_sum += attack_dict['fraction_malicious']
+                split_points.append(int(running_sum * len(all_malicious)))
 
-                chosen = random.sample(malicious_indices, n_mal)
+            prev = 0
+            for attack_dict, next_split in zip(self.multi_attack_args, split_points):
+                chosen = all_malicious[prev:next_split]
                 print(f"Malicious Client Indices attack {attack_dict['attack_type']}: {chosen}")
-
-                # Mark them as malicious with this attack config
+                wandb.log({f"malicious_clients_{attack_dict['attack_type']}": chosen})
                 for c in chosen:
                     client_attack_args[c] = attack_dict
-                # Remove them from the pool
-                malicious_indices -= set(chosen)
+                prev = next_split
+
+            # for attack_dict in self.multi_attack_args:
+            #     relative_fraction = attack_dict['fraction_malicious']
+            #     n_mal = int(relative_fraction * len(malicious_indices))
+            #     n_mal = min(n_mal, len(malicious_indices))
+            #     if n_mal <= 0:
+            #         continue  # skip if fraction is too small
+
+            #     chosen = random.sample(malicious_indices, n_mal)
+            #     print(f"Malicious Client Indices attack {attack_dict['attack_type']}: {chosen}")
+
+            #     # Mark them as malicious with this attack config
+            #     for c in chosen:
+            #         client_attack_args[c] = attack_dict
+            #     # Remove them from the pool
+            #     malicious_indices -= set(chosen)
 
             # 4) Create the Client objects
             clients = []
@@ -216,6 +235,7 @@ class BaseServer:
                 if len(malicious_ids) > num_malicious:
                     malicious_ids = random.sample(malicious_ids, num_malicious)
             print(f"Malicious Client Indices: {malicious_ids}")
+            wandb.log({"malicious_clients": malicious_ids})
 
             clients = []
             for i in range(num_clients):

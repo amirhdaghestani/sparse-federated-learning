@@ -1,25 +1,17 @@
 training_config:
-  project_name: final_mnist_sparse_capped_backdoor_random
+  project_name: final_mnist_sparse_weights
   model_name: ThreeLayerFC
   aggregate_type: sparse
   dataset_name: MNIST
-  num_clients: 200
+  num_clients: 10
   fraction_malicious: 0.4
   total_epochs: 200
   q_factor: 0.8
   evaluate_each_epoch: 1
   attack_args:
-    attack_type: backdoor
+    attack_type: flip_labels
     attack_epoch: 2
-    backdoor_pattern: 
-      i: 9
-      j: 9
-      h: 10
-      w: 10
-      v: 0
-    backdoor_target: random
     max_label: 9
-  normalize_params: false
   batch_size: 64
   local_epochs: 3
   malicious_type: group_oriented
@@ -47,34 +39,31 @@ sweep_config:
   parameters:
     q_factor:
       values:
-      # - 0.9
-      - 0.6
+      - 0.9
     fraction_malicious:
       values:
-      # - 0.4
-      # - 0.3
-      # - 0.2
-      - 0.1
+      - 0.4
     sparse_params.alpha:
       values:
       - 0.01
     sparse_params.beta:
       values:
+      - 0.0015
       - 0.0006
-      - 0.0003
     sparse_params.k_value:
       values:
+      - - 0
+        - 10
+        - null
+        - null
+        - null
+        - 0.05
       - - 8
         - 100
         - null
         - null
-        - 0.01
-      # - - 8
-      #   - 100
-      #   - null
-      #   - null
-      #   - 0.009
+        - null
+        - 0.05
     normalize_params:
       values:
-      # - true
       - false
