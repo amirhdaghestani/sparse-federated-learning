@@ -28,18 +28,11 @@ def write_config_to_yaml(filepath, config):
 
 def get_model(model_name):
     """Retrieve model instance by name."""
-    from model.model import DeeperCIFARCNN, AlexNet, SimpleCNNWithBatchNorm, PyTorchLeNet5, ThreeLayerFC, ThreeLayerFCNorm, ResNet18, ResNet20, VGG11
+    from model.model import DeeperCIFARCNN, ThreeLayerFC
     # Mapping of model names to classes
     MODEL_MAP = {
         "DeeperCIFARCNN": DeeperCIFARCNN,
-        "AlexNet": AlexNet,
-        "SimpleCNNWithBatchNorm": SimpleCNNWithBatchNorm,
-        "PyTorchLeNet5": PyTorchLeNet5,
         "ThreeLayerFC": ThreeLayerFC,
-        "ThreeLayerFCNorm": ThreeLayerFCNorm,
-        "ResNet18": ResNet18,
-        "ResNet20": ResNet20,
-        "VGG11": VGG11
     }
 
     if model_name in MODEL_MAP:
