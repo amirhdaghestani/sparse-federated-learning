@@ -161,7 +161,7 @@ def generate_runs_from_sweep_config(sweep_config, num_run_per_config):
 
     return runs
 
-def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_agents, num_gpus):
+def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_agents, num_gpus, ignore_default_params):
     """
     Manually execute a subset of runs assigned to this agent.
     """
@@ -199,12 +199,22 @@ def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_
                 f = int(fraction_malicious * num_clients)
 
                 # Adjust Krum factor
-                if defence_args['defence_type'] in ['krum', 'bulyan']:
+                if defence_args['defence_type'] in ['krum', 'bulyan'] and not ignore_default_params:
                     combined_config['defence_args']['krum_factor'] = num_clients - f - 2
 
                 # Adjust Trimmed Mean factor
-                if defence_args['defence_type'] in ['trimmed_mean']:
+                if defence_args['defence_type'] in ['trimmed_mean'] and not ignore_default_params:
                     combined_config['defence_args']['trimmed_factor'] = fraction_malicious
+
+            #     # Adjust Bulyan factor
+            #     if defence_args['defence_type'] in ['bulyan']:
+            #         g = num_clients - 2 * f  # Compute g for Bulyan
+            #         if g <= 4 * f:
+            #             # Adjust bulyan_factor to a feasible value
+            #             combined_config['defence_args']['bulyan_factor'] = num_clients // 4
+            #         else:
+            #             combined_config['defence_args']['bulyan_factor'] = f
+
 
             # Initialize WandB manually with the fetched config
             wandb.init(
@@ -233,6 +243,7 @@ def main():
     parser.add_argument("--num-agents", type=int, default=1, help="Number of parallel agents to run")
     parser.add_argument("--num-gpus", type=int, default=0, help="Number of gpus to run")
     parser.add_argument("--num-run-per-config", type=int, default=1, help="Number of runs per each config")
+    parser.add_argument("--ignore-default-params", action="store_true", help="Ignore default params for krum and trimmed mean")
 
 
     args = parser.parse_args()
@@ -296,6 +307,8 @@ def main():
     num_agents = args.num_agents
     num_gpus = args.num_gpus
     num_run_per_config = args.num_run_per_config
+    ignore_default_params = args.ignore_default_params
+
     processes = []
     if len(GPUS) < num_gpus:
         GPUS = list(range(num_gpus))
@@ -321,6 +334,7 @@ def main():
                 training_config=training_config,
                 total_agents=num_agents,
                 num_gpus=num_gpus,
+                ignore_default_params=ignore_default_params,
             )
             for agent_id in range(num_agents)
         )
