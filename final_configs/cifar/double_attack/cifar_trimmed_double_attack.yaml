@@ -10,11 +10,11 @@ training_config:
   evaluate_each_epoch: 1
   multi_attack_args:
     - attack_type: boost_gradient
-      attack_epoch: 5
+      attack_epoch: 2
       boost_factor: -1
       fraction_malicious: 0.5
     - attack_type: random_parameters
-      attack_epoch: 2
+      attack_epoch: 5
       random_parameters_mean: 5
       random_parameters_std: 1.5
       fraction_malicious: 0.5
@@ -34,8 +34,8 @@ sweep_config:
   parameters:
     q_factor:
       values:
-      - 0.8
-      - 0.7
+      - 0.9
+      - 0.6
     fraction_malicious:
       values:
       - 0.4
@@ -45,6 +45,3 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-    defence_args.trimmed_factor:
-      values:
-      - 0.1

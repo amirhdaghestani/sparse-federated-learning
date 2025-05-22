@@ -51,3 +51,4 @@ sweep_config:
       values:
       - 50
       - 40
+      - 20

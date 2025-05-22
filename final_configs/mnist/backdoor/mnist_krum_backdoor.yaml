@@ -46,6 +46,3 @@ sweep_config:
     fedavg_params.alpha:
       values:
       - 0.01
-    defence_args.krum_factor:
-      values:
-      - 130

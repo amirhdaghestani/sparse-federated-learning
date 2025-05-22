@@ -43,3 +43,5 @@ sweep_config:
     defence_args.bulyan_factor:
       values:
       - 50
+      - 40
+      - 20
