@@ -206,16 +206,6 @@ def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_
                 if defence_args['defence_type'] in ['trimmed_mean'] and not ignore_default_params:
                     combined_config['defence_args']['trimmed_factor'] = fraction_malicious
 
-            #     # Adjust Bulyan factor
-            #     if defence_args['defence_type'] in ['bulyan']:
-            #         g = num_clients - 2 * f  # Compute g for Bulyan
-            #         if g <= 4 * f:
-            #             # Adjust bulyan_factor to a feasible value
-            #             combined_config['defence_args']['bulyan_factor'] = num_clients // 4
-            #         else:
-            #             combined_config['defence_args']['bulyan_factor'] = f
-
-
             # Initialize WandB manually with the fetched config
             wandb.init(
                 project=project_name,
