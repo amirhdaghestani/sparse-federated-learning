@@ -5,7 +5,7 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 import wandb
 
-from model.model import SimpleCNNWithBatchNorm
+from model.model import DeeperCIFARCNN
 from client.client import Client
 from attack.attack import Attack
 from defence.defence import Defence
@@ -34,7 +34,7 @@ class BaseServer:
         defence_args=None,
         total_epochs=5,
         q_factor=0.1,
-        model=SimpleCNNWithBatchNorm(),
+        model=DeeperCIFARCNN(),
         evaluate_each_epoch=2,
         local_epochs=1,
         batch_size=64,
