@@ -17,7 +17,7 @@ class SparseFLServer(BaseServer):
         alpha, 
         beta, 
         is_ftotal=True, 
-        lambda_val=(0, 0.05, None),
+        k_value=(0, None, None, None, None),
         c_alpha=1e-4, 
         rho_alpha=0.5, 
         max_line_search_iterations_alpha=0,
@@ -25,6 +25,7 @@ class SparseFLServer(BaseServer):
         rho_beta=0.5, 
         max_line_search_iterations_beta=10,
         estimate_initial_updates=False,
+        normalize_gradients=False,
     ):
         """
         Sparse Federated Learning main loop.
@@ -38,8 +39,8 @@ class SparseFLServer(BaseServer):
         is_ftotal : bool
             Flag to indicate if the entire local loss is used (True) 
             or partial in the weight update step.
-        lambda_val : tuple
-            (start, end, end_epoch). If end_epoch is None => use total_epochs. 
+        k_value : tuple
+            (start_epoch, end_epoch, start_val, end_val). If end_epoch is None => use total_epochs. 
             Controls the threshold used in the simplex projection.
         c_alpha : float
             Line-search parameter for alpha.
@@ -53,14 +54,9 @@ class SparseFLServer(BaseServer):
             Reduction factor for beta.
         max_line_search_iterations_beta : int
             Maximum iterations for beta line search.
+        normalize_gradients : bool
+            Whether to normalize gradients during flattening.
         """
-
-        # Build the schedule for lambda_value
-        num_steps = lambda_val[-1] if lambda_val[-1] else self.total_epochs
-        lambda_range = np.linspace(lambda_val[0], lambda_val[1], num_steps).tolist()
-        # If the total epochs exceed num_steps, keep the final value for the remainder
-        lambda_range += [lambda_val[1]] * max(0, self.total_epochs - len(lambda_range))
-
         # Initialize weights
         num_clients = len(self.clients)
         w = [1.0 / num_clients] * num_clients
@@ -77,7 +73,33 @@ class SparseFLServer(BaseServer):
         G, F_T_next = client_gradients, client_losses
 
         # For convenience in updates
-        G_next = copy.deepcopy(G)
+        G_next = [[tensor.clone() for tensor in client_grads] for client_grads in G]
+
+        # Generate k_values list for each epoch
+        k_values = [num_clients] * self.total_epochs  # Default to num_clients
+
+        start_decay_epoch = k_value[0]
+        end_decay_epoch = k_value[1] if k_value[1] is not None else self.total_epochs
+        start_k_value = k_value[2] if k_value[2] is not None else num_clients
+        end_k_value = k_value[3] if k_value[3] is not None else int((1 - self.fraction_malicious) * num_clients)
+
+        # Linear decay of k_value from start_k_value to end_k_value over the epochs
+        if start_decay_epoch < end_decay_epoch:
+            for epoch in range(start_decay_epoch, end_decay_epoch + 1):
+                progress = (epoch - start_decay_epoch) / (end_decay_epoch - start_decay_epoch)
+                k_values[epoch] = int(start_k_value + progress * (end_k_value - start_k_value))
+
+        # Preserve end_k_value after end_decay_epoch
+        for epoch in range(end_decay_epoch + 1, self.total_epochs):
+            k_values[epoch] = end_k_value
+
+        # Max Bound:
+        maximum_weight_bound = None
+        if k_value[4] is not None:
+            maximum_weight_bound = k_value[4]
+        else:
+            weight_bound_slack = k_value[5] if len(k_value) > 5 and k_value[5] is not None else 0.05
+            maximum_weight_bound = 1.0 / (int((1 - weight_bound_slack - self.fraction_malicious) * num_clients))
 
         # Main loop
         for epoch in range(self.total_epochs):
@@ -101,17 +123,16 @@ class SparseFLServer(BaseServer):
             avg_loss_before = np.matmul(np.array(F_T_next).T, np.array(w))
 
             # Update weights w
-            current_lambda = lambda_range[epoch]
+            current_k_value = k_values[epoch]
             w = self._weight_update(
-                G, G_next, F_T_next, w, alpha, beta,
-                current_lambda, is_ftotal,
-                max_line_search_iterations_beta,
-                c_beta,
-                rho_beta
+                G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, beta=beta,
+                k_value=current_k_value, maximum_weight_bound=maximum_weight_bound,
+                is_ftotal=is_ftotal,
+                max_line_search_iterations=max_line_search_iterations_beta,
+                c_beta=c_beta,
+                rho_beta=rho_beta,
+                normalize_gradients=normalize_gradients,
             )
-
-            if max_line_search_iterations_beta == 0 and w.count(0) / len(w) >= self.fraction_malicious:
-                beta *= 0.7
 
             # Second model update using new w
             self._theta_update(G=G, G_next=G_next, F_T_next=F_T_next, w=w, alpha=alpha, epoch=epoch,
@@ -124,12 +145,13 @@ class SparseFLServer(BaseServer):
             wandb.log({
                 "avg_loss_before_weight_update": float(avg_loss_before),
                 "avg_loss_after_weight_update": float(avg_loss_after),
-                "lambda_current": current_lambda,
-                "beta": float(beta)
+                "k_value_current": current_k_value,
+                "beta": float(beta),
+                "weights": [float(weight) for weight in w],
             })
 
             # Move to next iteration
-            G = copy.deepcopy(G_next)
+            G = [[tensor.clone() for tensor in client_grads] for client_grads in G_next]
             # Evaluate periodically
             if epoch % self.evaluate_each_epoch == 0:
                 test_acc, test_loss = self.calculate_accuracy(is_fedavg=False)
@@ -137,7 +159,7 @@ class SparseFLServer(BaseServer):
 
     def _line_search_alpha(self, alpha, G, F_T_next, w, c, rho, epoch, max_iteration=3):
         """
-        Armijo line-search for alpha. 
+        Armijo line-search for alpha.
         Decreases alpha by factor rho if improvement is insufficient.
         """
         if max_iteration == 0:
@@ -211,41 +233,61 @@ class SparseFLServer(BaseServer):
         )
 
         # Overwrite inputs in place
-        G_next[:] = updated_grads
+        for i in range(len(G_next)):
+            for j in range(len(G_next[i])):
+                G_next[i][j].copy_(updated_grads[i][j])
         F_T_next[:] = updated_losses
 
     def _weight_update(
-        self, G, G_next, F_T_next, w, alpha, beta, lambda_value, is_ftotal,
-        max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6
+        self, G, G_next, F_T_next, w, alpha, beta, k_value, maximum_weight_bound, is_ftotal,
+        max_line_search_iterations, c_beta, rho_beta, eye_factor=1e-6, normalize_gradients=False,
     ):
         """
-        Updates weight vector w (the distribution across clients) with 
-        backtracking line search on beta and projection to a simplex.
+        Memory-optimized weight update
         """
-        G_flat = self._flatten_tensors(G)
-        G_next_flat = self._flatten_tensors(G_next)
+        # Convert w to tensor once
         w_tensor = torch.tensor(w, dtype=torch.float32, device=self.device)
         F_T_next_tensor = torch.tensor(F_T_next, dtype=torch.float32, device=self.device)
 
-        # G^T G_next plus a tiny regularization on the diagonal
+        # Use in-place operations where possible
+        G_flat = self._flatten_tensors(G, normalize=normalize_gradients)
+        G_next_flat = self._flatten_tensors(G_next, normalize=normalize_gradients)
+        
+        # Compute G^T G_next in-place
         G_T_G_next = torch.matmul(G_flat.T, G_next_flat)
-        G_T_G_next += eye_factor * torch.eye(G_T_G_next.shape[0], device=self.device)
-        G_T_G_next_w = torch.matmul(G_T_G_next, w_tensor)
-
-        if is_ftotal:
-            m_next = w_tensor + alpha * beta * G_T_G_next_w - beta * F_T_next_tensor
+        G_T_G_next.add_(eye_factor * torch.eye(G_T_G_next.shape[0], device=self.device))
+        
+        # Compute G_T_G_next_w in-place
+        G_T_G_next_w = G_T_G_next.matmul(w_tensor)
+        
+        # Compute m_next in-place
+        if is_ftotal is True or is_ftotal == "fedlaw":
+            m_next = w_tensor.clone()
+            m_next.add_(alpha * beta * G_T_G_next_w)
+            m_next.sub_(beta * F_T_next_tensor)
+        elif is_ftotal == "bsum":
+            m_next = w_tensor.clone()
+            m_next.sub_(beta * F_T_next_tensor)
         else:
-            m_next = w_tensor + alpha * beta * G_T_G_next_w
+            m_next = w_tensor.clone()
+            m_next.add_(alpha * beta * G_T_G_next_w)
+
+        # Free memory explicitly
+        del G_flat
+        del G_next_flat
+        del G_T_G_next
+        torch.cuda.empty_cache()  # Clear GPU cache if using CUDA
 
         w_next_normalize = self._sparse_projection_onto_simplex(
-            m_next.cpu().numpy(), 
-            lambda_value
+            m_next=m_next.cpu().numpy(),
+            k_value=k_value,
+            t=maximum_weight_bound,
         )
 
         # Line search for beta
         beta, w_next_normalize, m_next = self._line_search_for_beta(
             w_tensor, m_next, w_next_normalize, alpha, beta, 
-            G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, 
+            G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, maximum_weight_bound,
             max_line_search_iterations, c_beta, rho_beta
         )
 
@@ -257,7 +299,7 @@ class SparseFLServer(BaseServer):
 
     def _line_search_for_beta(
         self, w_tensor, m_next, w_next_normalize, alpha, beta, 
-        G_T_G_next_w, F_T_next_tensor, is_ftotal, lambda_value, 
+        G_T_G_next_w, F_T_next_tensor, is_ftotal, k_value, maximum_weight_bound,
         max_line_search_iterations, c_beta, rho_beta
     ):
         """
@@ -283,44 +325,191 @@ class SparseFLServer(BaseServer):
                 else:
                     m_next = w_tensor + alpha * beta * G_T_G_next_w
                 w_next_normalize = self._sparse_projection_onto_simplex(
-                    m_next.cpu().numpy(), 
-                    lambda_value
+                    m_next=m_next.cpu().numpy(), 
+                    k_value=k_value,
+                    t=maximum_weight_bound,
                 )
         else:
             print("Line search for beta did not converge within the allotted iterations.")
 
         return beta, w_next_normalize, m_next
 
-    def _sparse_projection_onto_simplex(self, m_next, lambda_value):
+    def _sparse_projection_onto_simplex(self, *args, **kwargs):
         """
-        Projects m_next onto the simplex, ignoring elements with 
-        absolute value <= lambda_value.
+        Alias for the simplex projection method.
         """
-        # Sort in descending order
-        sorted_m = np.sort(m_next)[::-1]
-        idxs_desc = np.argsort(m_next)[::-1]
+        t_val = kwargs.get("t", None)
+        if t_val is not None:
+            return self._sparse_projection_capped_simplex(*args, **kwargs)
+        else:
+            kwargs.pop("t", None)
+            return self._sparse_projection_onto_unit_simplex(*args, **kwargs)
 
-        # Identify elements with magnitude > lambda_value
-        valid_mask = np.abs(sorted_m) > lambda_value
-        if not np.any(valid_mask):
+    def _sparse_projection_onto_unit_simplex(self, m_next, k_value):
+        """
+        Projects m_next onto the simplex by keeping the largest k_value elements.
+        """
+        # Make sure m_next is a NumPy array.
+        m_next = np.array(m_next, dtype=float)
+
+        if k_value < 1 or k_value > len(m_next):
             return [0.] * len(m_next)
 
-        # Subset to valid elements
-        P_L_lambda = sorted_m[valid_mask]
+        # Sort in descending order
+        idxs_desc = np.argsort(m_next)[::-1]
+        sorted_m = m_next[idxs_desc]  # Now valid because m_next is a NumPy array
+
+        # Select the top k elements
+        top_k_idxs = idxs_desc[:k_value]
+        P_L_lambda = sorted_m[:k_value]
+
+        # Compute cumulative sum
         cumsum_vals = np.cumsum(P_L_lambda)
 
-        # Rho condition
-        rhos = (P_L_lambda > (cumsum_vals - 1.0) / np.arange(1, len(P_L_lambda) + 1))
+        # Find rho index
+        rhos = (P_L_lambda > (cumsum_vals - 1.0) / np.arange(1, k_value + 1))
         if np.any(rhos):
             rho_idx = np.where(rhos)[0].max()
             eta = (cumsum_vals[rho_idx] - 1.0) / (rho_idx + 1.0)
         else:
-            # fallback if no candidate
-            eta = cumsum_vals[-1] / len(P_L_lambda)
+            eta = cumsum_vals[-1] / k_value  # fallback
 
-        # Final projection
+        # Apply projection
         P_plus = np.maximum(P_L_lambda - eta, 0)
+
+        # Create projected output
         w_proj = np.zeros_like(m_next)
-        w_proj[idxs_desc[valid_mask]] = P_plus
+        w_proj[top_k_idxs] = P_plus
 
         return w_proj.tolist()
+    
+    def _sparse_projection_capped_simplex(self, m_next, k_value, t):
+        """
+        Projects m_next onto the capped simplex:
+
+            min_w  0.5 * ||w - m_next||^2
+            s.t.   sum_i w_i = 1,   0 <= w_i <= t
+
+        Optionally, only the top 'k_value' largest components
+        of m_next can be non-zero; the rest are forced to 0.
+
+        Parameters
+        ----------
+        m_next : array-like of shape (n,)
+            Input vector.
+        t : float
+            Upper bound (cap) for each coordinate w_i.
+        k_value : int
+            Number of largest components to consider for the projection.
+            All others become 0.
+
+        Returns
+        -------
+        w_proj : list of float
+            A projected vector of the same length as m_next, satisfying
+            sum(w_proj) = 1 (if feasible) and each w_proj[i] <= t.
+        """
+        m_next = np.array(m_next, dtype=float)
+        n_full = len(m_next)
+        k = 1.0
+
+        if k_value < 1:
+            raise ValueError("k_value < 1 is not valid when sum must be 1.")
+
+        idxs_desc = np.argsort(m_next)[::-1]
+        k_value = min(k_value, n_full)
+        valid_mask = idxs_desc[:k_value]
+        y0 = m_next[valid_mask]
+
+        if k_value * t < k:
+            raise ValueError("The sum=1 constraint is infeasible with k_value * t < 1.")
+
+        y0_scaled = y0 / t
+        k_scaled = k / t
+        x_part = np.zeros(k_value, dtype=float)
+        idx_asc = np.argsort(y0_scaled)
+        y_asc = y0_scaled[idx_asc]
+        s_cum = np.cumsum(y_asc)
+        y_asc = np.append(y_asc, np.inf)
+
+        for b in range(1, k_value + 1):
+            gamma = (k_scaled + b - k_value - s_cum[b - 1]) / b
+            if (y_asc[0] + gamma > 0) and (y_asc[b - 1] + gamma < 1) and (y_asc[b] + gamma >= 1):
+                xtmp = np.concatenate((y_asc[:b] + gamma, np.ones(k_value - b)))
+                xtmp *= t
+                x_part[idx_asc] = xtmp
+                w_proj = np.zeros(n_full, dtype=float)
+                w_proj[valid_mask] = x_part
+                if np.isclose(np.sum(w_proj), 1.0, atol=1e-7):
+                    return w_proj.tolist()
+
+        for a in range(1, k_value):
+            for b in range(a + 1, k_value + 1):
+                gamma = (k_scaled + b - k_value + s_cum[a - 1] - s_cum[b - 1]) / (b - a)
+                if (y_asc[a - 1] + gamma <= 0) and (y_asc[a] + gamma > 0) and (y_asc[b - 1] + gamma < 1) and (y_asc[b] + gamma >= 1):
+                    xtmp = np.concatenate((np.zeros(a), y_asc[a:b] + gamma, np.ones(k_value - b)))
+                    xtmp *= t
+                    x_part[idx_asc] = xtmp
+                    w_proj = np.zeros(n_full, dtype=float)
+                    w_proj[valid_mask] = x_part
+                    if np.isclose(np.sum(w_proj), 1.0, atol=1e-7):
+                        return w_proj.tolist()
+
+        needed = 1.0
+        x_part = np.zeros(k_value, dtype=float)
+        for i in range(k_value):
+            if needed >= t:
+                x_part[i] = t
+                needed -= t
+            else:
+                x_part[i] = needed
+                needed = 0.0
+                break
+
+        w_proj = np.zeros(n_full, dtype=float)
+        w_proj[valid_mask] = x_part
+
+        if not np.isclose(np.sum(w_proj), 1.0, atol=1e-7):
+            raise ValueError("Projection failed: sum of w_proj is not close to 1.0")
+
+        return w_proj.tolist()
+
+    def _flatten_tensors(self, input_list, normalize=False):
+        """
+        Flattens and optionally normalizes gradients in-place using median norm.
+        
+        Parameters
+        ----------
+        input_list : list
+            List of lists of tensors to flatten
+        normalize : bool
+            Whether to normalize the gradients using median norm
+            
+        Returns
+        -------
+        torch.Tensor
+            Concatenated tensor of shape (num_params, num_clients)
+        """
+        if normalize:
+            # First pass: calculate norms and median
+            norms = []
+            for client_grads in input_list:
+                squared_norm = 0
+                for grad in client_grads:
+                    squared_norm += torch.sum(grad * grad)
+                norms.append(torch.sqrt(squared_norm))
+            
+            median_norm = torch.median(torch.stack(norms))
+            
+            # Second pass: flatten and normalize in one go
+            flattened = []
+            for i, client_grads in enumerate(input_list):
+                scale = median_norm / norms[i] if norms[i] > 0 else 1.0
+                flat = torch.cat([grad.view(-1) * scale for grad in client_grads])
+                flattened.append(flat)
+        else:
+            # Just flatten without normalization
+            flattened = [torch.cat([grad.view(-1) for grad in client_grads]) 
+                        for client_grads in input_list]
+        
+        return torch.stack(flattened, dim=1)  # Shape: (num_params, num_clients)

@@ -1,11 +1,11 @@
 import random
-import copy
 import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import datasets, transforms
+import wandb
 
-from model.model import SimpleCNNWithBatchNorm
+from model.model import DeeperCIFARCNN
 from client.client import Client
 from attack.attack import Attack
 from defence.defence import Defence
@@ -25,8 +25,6 @@ class BaseServer:
     It does NOT implement a specific aggregation strategy.
     """
 
-    ATTACK_ON_BENIGN_UPDATES = ['lie_attack']
-
     def __init__(
         self, 
         dataset_name,
@@ -36,19 +34,20 @@ class BaseServer:
         defence_args=None,
         total_epochs=5,
         q_factor=0.1,
-        model=SimpleCNNWithBatchNorm(),
+        model=DeeperCIFARCNN(),
         evaluate_each_epoch=2,
         local_epochs=1,
         batch_size=64,
         malicious_type="group_oriented",
         device="cpu",
         multi_attack_args=None,
+        normalize_params=False,
     ):
         """
         Parameters
         ----------
         dataset_name : str
-            Name of the dataset ('MNIST', 'EMNIST', etc.).
+            Name of the dataset ('MNIST', 'CIFAR10', etc.).
         num_clients : int
             Number of clients.
         fraction_malicious : float
@@ -104,6 +103,7 @@ class BaseServer:
             self.attack_func = Attack(attack_args=attack_args)
 
         self.multi_attack_args = multi_attack_args
+        self.normalize_params = normalize_params
 
         # Initialize clients
         self.clients = self._initialize_clients(
@@ -158,6 +158,9 @@ class BaseServer:
                 mal_list = []
                 for g_id in group_malicious_ids:
                     mal_list.extend(np.where(np.array(group2client_idx) == g_id)[0].tolist())
+                if len(mal_list) < total_malicious_count:
+                    g_id = random.sample(set(range(num_label)) - set(group_malicious_ids), 1)
+                    mal_list.extend(np.where(np.array(group2client_idx) == g_id)[0].tolist())
                 # In case we have more clients than total_malicious_count, randomly pick
                 if len(mal_list) > total_malicious_count:
                     mal_list = random.sample(mal_list, total_malicious_count)
@@ -165,21 +168,23 @@ class BaseServer:
             else:
                 raise ValueError(f"Unknown malicious_type: {malicious_type}")
 
+            all_malicious = list(malicious_indices)
+            random.shuffle(all_malicious)
+
+            split_points = []
+            running_sum = 0.0
             for attack_dict in self.multi_attack_args:
-                relative_fraction = attack_dict['fraction_malicious']
-                n_mal = int(relative_fraction * len(malicious_indices))
-                n_mal = min(n_mal, len(malicious_indices))
-                if n_mal <= 0:
-                    continue  # skip if fraction is too small
+                running_sum += attack_dict['fraction_malicious']
+                split_points.append(int(running_sum * len(all_malicious)))
 
-                chosen = random.sample(malicious_indices, n_mal)
+            prev = 0
+            for attack_dict, next_split in zip(self.multi_attack_args, split_points):
+                chosen = all_malicious[prev:next_split]
                 print(f"Malicious Client Indices attack {attack_dict['attack_type']}: {chosen}")
-
-                # Mark them as malicious with this attack config
+                wandb.log({f"malicious_clients_{attack_dict['attack_type']}": chosen})
                 for c in chosen:
                     client_attack_args[c] = attack_dict
-                # Remove them from the pool
-                malicious_indices -= set(chosen)
+                prev = next_split
 
             # 4) Create the Client objects
             clients = []
@@ -196,8 +201,8 @@ class BaseServer:
                 ))
             return clients
         else:
+            num_malicious = int(fraction_malicious * num_clients)
             if malicious_type == "random":
-                num_malicious = int(fraction_malicious * num_clients)
                 malicious_ids = random.sample(range(num_clients), num_malicious)
             elif malicious_type == "group_oriented":
                 num_group_malicious = int(fraction_malicious * num_label)
@@ -205,7 +210,14 @@ class BaseServer:
                 malicious_ids = []
                 for group_malicious_id in group_malicious_ids:
                     malicious_ids.extend(np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist())
+                if len(malicious_ids) < num_malicious:
+                    group_malicious_id = random.sample(set(range(num_label)) - set(group_malicious_ids), 1)
+                    ids = np.where(np.array(group2client_idx) == group_malicious_id)[0].tolist()
+                    malicious_ids.extend(random.sample(ids, num_malicious - len(malicious_ids)))
+                if len(malicious_ids) > num_malicious:
+                    malicious_ids = random.sample(malicious_ids, num_malicious)
             print(f"Malicious Client Indices: {malicious_ids}")
+            wandb.log({"malicious_clients": malicious_ids})
 
             clients = []
             for i in range(num_clients):
@@ -357,6 +369,29 @@ class BaseServer:
             flattened.append(cat)
         return torch.stack(flattened).T
 
+    def _normalize_gradients(self, client_gradients):
+        # Compute the norm of each gradient
+        grad_norms = [torch.norm(torch.cat([g.view(-1) for g in grad])).item() for grad in client_gradients]
+        
+        # Compute the median of the norms
+        median_norm = np.median(grad_norms)
+        
+        # Scale each gradient to have the same norm as the median
+        for i, grad in enumerate(client_gradients):
+            grad_norm = grad_norms[i]
+            if grad_norm > 0:
+                scale_factor = median_norm / grad_norm
+                for j in range(len(grad)):
+                    grad[j] = grad[j] * scale_factor
+
+    def _normalize_losses(self, client_losses):
+        # Compute the median of the losses
+        median_loss = np.median(client_losses)
+        
+        # Scale each loss to have the same value as the median
+        client_losses = [loss * (median_loss / loss) if loss > 0 else loss for loss in client_losses]
+        return client_losses
+
     def _gather_client_updates(
         self,
         global_weights,
@@ -386,20 +421,10 @@ class BaseServer:
             client_gradients.append(updates)
             client_losses.append(avg_loss)
 
-        # Attack on benign updates
-        if (
-            hasattr(self, 'attack_type') and
-            self.attack_type in self.ATTACK_ON_BENIGN_UPDATES and 
-            epoch >= self.attack_epoch and 
-            self.attack_func is not None
-        ):
-            # Malicious manipulation of benign updates
-            client_gradients, client_losses = self.attack_func(
-                grads=client_gradients["grads"] if "grads" in client_gradients.keys() else client_gradients,
-                losses=client_losses,
-                clients=self.clients,
-                **(self.attack_args if self.attack_args else {})
-            )
+        # Normalize gradients and losses
+        if self.normalize_params:
+            self._normalize_gradients(client_gradients)
+            client_losses = self._normalize_losses(client_losses)
 
         return client_gradients, client_losses
 

@@ -4,4 +4,3 @@ torchvision
 scipy~=1.10.1
 wandb~=0.18.3
 joblib~=1.2.0
-

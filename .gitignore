@@ -163,7 +163,7 @@ cython_debug/
 /data
 /wandb
 .vscode
-/configs
 /*/*/*/*
 !/*/*/*/*.yaml
 /*.yaml
+/server/test.py
