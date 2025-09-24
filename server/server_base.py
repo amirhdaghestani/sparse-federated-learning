@@ -25,6 +25,8 @@ class BaseServer:
     It does NOT implement a specific aggregation strategy.
     """
 
+    ATTACK_ON_BENIGN_UPDATES = ['lie_attack']
+
     def __init__(
         self, 
         dataset_name,
@@ -425,6 +427,21 @@ class BaseServer:
         if self.normalize_params:
             self._normalize_gradients(client_gradients)
             client_losses = self._normalize_losses(client_losses)
+
+        # Attack on benign updates
+        if (
+            hasattr(self, 'attack_type') and
+            self.attack_type in self.ATTACK_ON_BENIGN_UPDATES and 
+            epoch >= self.attack_epoch and 
+            self.attack_func is not None
+        ):
+            # Malicious manipulation of benign updates
+            client_gradients, client_losses = self.attack_func(
+                grads=client_gradients,
+                losses=client_losses,
+                clients=self.clients,
+                **(self.attack_args if self.attack_args else {})
+            )
 
         return client_gradients, client_losses
 

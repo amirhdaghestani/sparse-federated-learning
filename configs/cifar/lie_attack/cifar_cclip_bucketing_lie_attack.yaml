@@ -1,0 +1,49 @@
+training_config:
+  project_name: final_cifar_cclip_bucketing_lie_attack
+  model_name: DeeperCIFARCNN
+  aggregate_type: fedavg
+  dataset_name: CIFAR10
+  num_clients: 200
+  fraction_malicious: 0.4
+  total_epochs: 400
+  q_factor: 0.8
+  evaluate_each_epoch: 1
+  attack_args:
+    attack_type: lie_attack
+    attack_epoch: 2
+  defence_args:
+    defence_type: cclip_bucketing
+    bucketing_factor: 2
+    cclip_tau: 10
+    cclip_n_iter: 1
+  batch_size: 16
+  local_epochs: 3
+  malicious_type: group_oriented
+  fedavg_params:
+    alpha: 0.01
+sweep_config:
+  method: grid
+  metric:
+    name: test_accuracy
+    goal: maximize
+  parameters:
+    q_factor:
+      values:
+      - 0.9
+      - 0.6
+    fraction_malicious:
+      values:
+      - 0.4
+      - 0.3
+      - 0.2
+      - 0.1
+    fedavg_params.alpha:
+      values:
+      - 0.01
+    defence_args.cclip_tau:
+      values:
+      - 10
+      - 0.1
+    defence_args.bucketing_factor:
+      values:
+      - 2

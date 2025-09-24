@@ -7,13 +7,21 @@ Official implementation of Byzantine-robust federated learning with sparse aggre
   * FedLAW (Our method)
   * Krum
   * Bulyan
+  * Bulyan-Bucketing
   * Trimmed Mean
+  * CCLIP
+  * CCLIP-Bucketing
+  * RFA (Robust Federated Averaging)
+  * RFA-Bucketing
+  * Coordinate-wise Median
+  * Huber
   * No Defense (baseline)
 * **Attack Types**
   * Label Flipping
   * Backdoor
   * Inverse Gradient
   * Double Attack
+  * Lie Attack
 * **Supported Datasets & Models**
   * MNIST → `ThreeLayerFC`
   * CIFAR-10 → `DeeperCIFARCNN`
@@ -46,9 +54,9 @@ training_config:
   fraction_malicious: 0.4
   total_epochs: 400             # 200 for MNIST, 400 for CIFAR
   attack_args:
-    attack_type: "boost_gradient"  # or "flip_labels", "backdoor"
+    attack_type: "boost_gradient"  # or "flip_labels", "backdoor", "lie_attack"
   defence_args:
-    defence_type: "trimmed_mean"   # or "krum", "bulyan", "no_defence"
+    defence_type: "trimmed_mean"   # or "krum", "bulyan", "bulyan_bucketing", "cclip", "cclip_bucketing", "rfa", "rfa_bucketing", "coord_median", "huber", "no_defence"
 ```
 
 2. **Run Training**
@@ -80,12 +88,14 @@ sparse-federated-learning/
 │   │   ├── backdoor/           # Backdoor attack configs
 │   │   ├── double_attack/      # Double attack configs
 │   │   ├── flip_labels/        # Label flipping attack configs
-│   │   └── inverse_gradient/   # Inverse gradient attack configs
+│   │   ├── inverse_gradient/   # Inverse gradient attack configs
+│   │   └── lie_attack/         # Lie attack configs
 │   └── cifar/                  # CIFAR experiment configs
 │       ├── backdoor/           # Backdoor attack configs
 │       ├── double_attack/      # Double attack configs
 │       ├── flip_labels/        # Label flipping attack configs
-│       └── inverse_gradient/   # Inverse gradient attack configs
+│       ├── inverse_gradient/   # Inverse gradient attack configs
+│       └── lie_attack/         # Lie attack configs
 ├── attacks/                    # Attack implementations
 ├── client/                     # Client side implementation
 ├── defence/                    # Defence mechanism implementations
@@ -106,11 +116,19 @@ sparse-federated-learning/
 - **Backdoor**: Targeted poisoning attack
 - **Inverse Gradient**: Gradient manipulation attack
 - **Double Attack**: Combined attack strategies
+- **Lie Attack**: Coordinated false information attack
 
 ### Defense Methods
 - **Krum**: Byzantine-robust aggregation
 - **Bulyan**: Enhanced Byzantine resilience
+- **Bulyan-Bucketing**: Bulyan with bucketing enhancement
 - **Trimmed Mean**: Statistical outlier removal
+- **CCLIP**: Coordinate-wise clipping defense
+- **CCLIP-Bucketing**: CCLIP with bucketing enhancement
+- **RFA**: Robust Federated Averaging
+- **RFA-Bucketing**: RFA with bucketing enhancement
+- **Coordinate-wise Median**: Coordinate-wise median aggregation
+- **Huber**: Robust loss-based defense
 - **No Defense**: Baseline comparison
 - **FedLAW**: Byzantine-robust federated learning with sparse aggregation weights
 

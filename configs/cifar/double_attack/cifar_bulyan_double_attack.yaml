@@ -22,7 +22,7 @@ training_config:
     defence_type: bulyan
     bulyan_factor: 25
     krum_factor: 170
-  batch_size: 64
+  batch_size: 16
   local_epochs: 3
   malicious_type: group_oriented
   fedavg_params:

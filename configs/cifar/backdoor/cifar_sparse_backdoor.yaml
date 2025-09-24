@@ -20,7 +20,7 @@ training_config:
     backdoor_target: random
     max_label: 9
   normalize_params: false
-  batch_size: 64
+  batch_size: 16
   local_epochs: 3
   malicious_type: group_oriented
   sparse_params:

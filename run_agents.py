@@ -206,6 +206,11 @@ def run_sweep_agent_manual(agent_id, runs, project_name, training_config, total_
                 if defence_args['defence_type'] in ['trimmed_mean'] and not ignore_default_params:
                     combined_config['defence_args']['trimmed_factor'] = fraction_malicious
 
+                # Adjust Huber delta
+                if defence_args['defence_type'] == 'huber' and not ignore_default_params:
+                    # ε  – upper bound on Byzantine fraction
+                    combined_config['defence_args']['byzantine_frac'] = fraction_malicious
+
             # Initialize WandB manually with the fetched config
             wandb.init(
                 project=project_name,

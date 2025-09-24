@@ -14,7 +14,7 @@ training_config:
     boost_factor: -1
   defence_args:
     defence_type: no_defence
-  batch_size: 64
+  batch_size: 16
   local_epochs: 3
   malicious_type: group_oriented
   fedavg_params:

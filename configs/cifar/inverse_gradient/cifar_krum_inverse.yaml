@@ -15,7 +15,7 @@ training_config:
   defence_args:
     defence_type: krum
     krum_factor: 170
-  batch_size: 64
+  batch_size: 16
   local_epochs: 3
   malicious_type: group_oriented
   fedavg_params:

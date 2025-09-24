@@ -21,7 +21,7 @@ training_config:
   defence_args:
     defence_type: trimmed_mean
     trimmed_factor: 0.1
-  batch_size: 64
+  batch_size: 16
   local_epochs: 3
   malicious_type: group_oriented
   fedavg_params:

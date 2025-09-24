@@ -1,0 +1,76 @@
+training_config:
+  project_name: final_cifar_sparse_capped_lie_attack
+  model_name: DeeperCIFARCNN
+  aggregate_type: sparse
+  dataset_name: CIFAR10
+  num_clients: 200
+  fraction_malicious: 0.4
+  total_epochs: 400
+  q_factor: 0.8
+  evaluate_each_epoch: 1
+  attack_args:
+    attack_type: lie_attack
+    attack_epoch: 2
+  normalize_params: false
+  batch_size: 16
+  local_epochs: 3
+  malicious_type: group_oriented
+  sparse_params:
+    alpha: 0.01
+    beta: 0.0001
+    is_ftotal: true
+    k_value:
+    - 10
+    - 20
+    - null
+    - null
+    - 0.009
+    c_alpha: 0.0001
+    rho_alpha: 0.5
+    max_line_search_iterations_alpha: 0
+    c_beta: 0.0001
+    rho_beta: 0.5
+    max_line_search_iterations_beta: 0
+
+sweep_config:
+  method: grid
+  metric:
+    name: test_accuracy
+    goal: maximize
+  parameters:
+    q_factor:
+      values:
+      - 0.9
+      - 0.6
+    fraction_malicious:
+      values:
+      - 0.4
+      - 0.3
+      - 0.2
+      - 0.1
+    sparse_params.alpha:
+      values:
+      - 0.01
+    sparse_params.beta:
+      values:
+      - 0.000001
+    sparse_params.k_value:
+      values:
+      - - 200
+        - 399
+        - null
+        - null
+        - null
+        - null
+      - - 300
+        - 399
+        - null
+        - null
+        - null
+        - null
+    normalize_params:
+      values:
+      - false
+    sparse_params.normalize_gradients:
+      values:
+      - false

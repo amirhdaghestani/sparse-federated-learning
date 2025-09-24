@@ -22,6 +22,8 @@ class Attack:
         # Attack on Gradient
         elif attack_type == 'boost_gradient':
             self.func = self.boost_gradient
+        elif attack_type == 'lie_attack':
+            self.func = self.lie_attack
         elif attack_type is not None:
             raise Exception("Attack type is invalid.")
 
@@ -99,6 +101,74 @@ class Attack:
     # Attack on Gradient
     def boost_gradient(*args, **kwargs):
         return [kwargs['boost_factor'] * grad for grad in kwargs['grads']]
+
+    def lie_attack(*args, **kwargs):
+        clients = kwargs['clients']
+        clients_grads = kwargs['grads']
+        clients_losses = kwargs.get('losses', None)
+        num_clients = len(clients)
+
+        clients_params = [clients_grads, clients_losses]
+
+        malicious_gradients = [
+            clients_grads[i]
+            for i, client in enumerate(clients) if not client.malicious
+        ]
+
+        malicious_losses = None
+        if clients_losses is not None:
+            malicious_losses = [
+                clients_losses[i]
+                for i, client in enumerate(clients) if not client.malicious
+            ]
+
+        malicious_params = [malicious_gradients, malicious_losses]
+
+        s = num_clients // 2 + 1 + num_clients - len(malicious_gradients)
+        phi_value = (num_clients - s) / num_clients
+        z_default = norm.ppf(phi_value)
+
+        z = kwargs.get("z", z_default)
+
+        # Initialize dictionary to store crafted malicious gradient
+        if isinstance(clients_grads[0], dict):
+            for_list = clients_grads[0].keys()
+            attacked_grad = {}
+            attacked_losses = [[]] * len(clients_grads[0])
+            attacked_params = [attacked_grad, attacked_losses]
+            sign_z = 1
+        else:
+            for_list = range(len(clients_grads[0]))
+            attacked_grad = [[]] * len(clients_grads[0])
+            attacked_losses = [[]] * len(clients_grads[0])
+            attacked_params = [attacked_grad, attacked_losses]
+            sign_z = 1
+
+        # Stack tensors for each key in the gradient dictionaries
+        for k, malicious in enumerate(malicious_params):
+            if malicious is not None:
+                if isinstance(malicious[0], float):
+                    mean_list = np.mean(malicious, axis=0)
+                    std_list = np.std(malicious, axis=0)
+                    attacked_params[k] = float(mean_list + sign_z * z * std_list)
+                else:
+                    for key in for_list:
+                        # Extract tensors for the current key from all malicious gradients
+                        stacked_tensors = torch.stack([grad[key].float() for grad in malicious])
+                        mean_tensor = torch.mean(stacked_tensors, dim=0)
+                        std_tensor = torch.std(stacked_tensors, dim=0)
+
+                        # Craft the malicious gradient for the current key
+                        attacked_params[k][key] = mean_tensor + sign_z * z * std_tensor
+
+        # Replace gradients for malicious clients
+        for i, client in enumerate(clients):
+            if client.malicious:
+                for j, param in enumerate(clients_params):
+                    if param is not None:
+                        param[i] = attacked_params[j]
+
+        return clients_params
 
     def __call__(self, *args, **kwargs):
         return self.func(*args, **kwargs)
