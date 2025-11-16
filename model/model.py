@@ -60,3 +60,10 @@ class DeeperCIFARCNN(nn.Module):
         x = self.fc2(x)
 
         return x
+
+
+class DeeperCIFAR100CNN(DeeperCIFARCNN):
+    """CIFAR-100 variant with 100 output classes."""
+
+    def __init__(self):
+        super().__init__(num_classes=100)

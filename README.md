@@ -25,6 +25,7 @@ Official implementation of Byzantine-robust federated learning with sparse aggre
 * **Supported Datasets & Models**
   * MNIST → `ThreeLayerFC`
   * CIFAR-10 → `DeeperCIFARCNN`
+  * CIFAR-100 → `DeeperCIFAR100CNN`
 * **Multi-GPU Training** with parallel agents
 * **Experiment Tracking** via Weights & Biases
 
@@ -47,8 +48,8 @@ Create a YAML config file (see `configs/` for examples):
 ```yaml
 training_config:
   project_name: "your_project"
-  model_name: "DeeperCIFARCNN"  # or "ThreeLayerFC"
-  dataset_name: "CIFAR10"       # or "MNIST"
+  model_name: "DeeperCIFARCNN"  # or "ThreeLayerFC", "DeeperCIFAR100CNN"
+  dataset_name: "CIFAR10"       # or "MNIST", "CIFAR100"
   aggregate_type: "fedavg"      # or "sparse"
   num_clients: 200
   fraction_malicious: 0.4

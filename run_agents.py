@@ -28,10 +28,11 @@ def write_config_to_yaml(filepath, config):
 
 def get_model(model_name):
     """Retrieve model instance by name."""
-    from model.model import DeeperCIFARCNN, ThreeLayerFC
+    from model.model import DeeperCIFARCNN, DeeperCIFAR100CNN, ThreeLayerFC
     # Mapping of model names to classes
     MODEL_MAP = {
         "DeeperCIFARCNN": DeeperCIFARCNN,
+        "DeeperCIFAR100CNN": DeeperCIFAR100CNN,
         "ThreeLayerFC": ThreeLayerFC,
     }
 
